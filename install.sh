@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  NimOS Beta 5 Installer                                    ║
+# ║  NimOS Beta 8 Installer                                    ║
 # ║  Transforms Ubuntu/Debian Server into a NimOS NAS          ║
 # ║  curl -fsSL https://raw.githubusercontent.com/               ║
-# ║    andresgv-beep/NimOs-beta-7/main/install.sh | sudo bash  ║
+# ║    andresgv-beep/NimOs-beta-8/main/install.sh | sudo bash  ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 set -euo pipefail
 
 # ── Config ──
-NIMBUS_VERSION="6.0.0-beta"
-NIMBUS_REPO="https://github.com/andresgv-beep/NimOs-beta-7"
+NIMBUS_VERSION="8.0.0-alpha"
+NIMBUS_REPO="https://github.com/andresgv-beep/NimOs-beta-8"
 NIMBUS_BRANCH="main"
 INSTALL_DIR="/opt/nimbusos"
 DATA_DIR="/var/lib/nimbusos"
@@ -238,7 +238,7 @@ install_nimos() {
   step "Installing NimOS application"
 
   # Download via tarball (no git auth needed)
-  TARBALL_URL="https://github.com/andresgv-beep/NimOs-beta-7/archive/refs/heads/${NIMBUS_BRANCH}.tar.gz"
+  TARBALL_URL="https://github.com/andresgv-beep/NimOs-beta-8/archive/refs/heads/${NIMBUS_BRANCH}.tar.gz"
   
   if [[ -d "$INSTALL_DIR/daemon" ]]; then
     log "Updating existing installation..."
@@ -365,24 +365,32 @@ EOF
   # ── Build and install nimos-daemon (Go binary) ──
   if [ -d "$INSTALL_DIR/daemon" ] && [ -f "$INSTALL_DIR/daemon/main.go" ]; then
     log "Building nimos-daemon (Go)..."
-    
+
     if ! command -v go &>/dev/null; then
       log "Installing Go compiler..."
       apt-get install -y -qq golang-go 2>/dev/null || warn "Failed to install Go — daemon will not be built"
     fi
-    
+
     if command -v go &>/dev/null; then
       cd "$INSTALL_DIR/daemon"
       systemctl stop nimos-daemon 2>/dev/null || true
-      go mod tidy 2>/dev/null
-      if go build -o "$INSTALL_DIR/daemon/nimos-daemon" . 2>/dev/null; then
-        chmod 755 "$INSTALL_DIR/daemon/nimos-daemon"
-        ok "nimos-daemon built (Go binary)"
+      go mod tidy 2>&1 | tail -3
+      if go build -o "$INSTALL_DIR/daemon/nimos-daemon" . 2>&1 | tail -10; then
+        if [ -f "$INSTALL_DIR/daemon/nimos-daemon" ]; then
+          chmod 755 "$INSTALL_DIR/daemon/nimos-daemon"
+          ok "nimos-daemon built ($(du -h $INSTALL_DIR/daemon/nimos-daemon | cut -f1))"
+        else
+          err "Go build finished but binary not found"
+        fi
       else
-        warn "nimos-daemon build failed"
+        err "nimos-daemon build failed — see errors above"
       fi
       cd "$INSTALL_DIR"
+    else
+      err "Go compiler unavailable — daemon cannot be built"
     fi
+  else
+    warn "daemon/ folder not found in repo — skipping Go build"
   fi
 
   # ── Install nimos-daemon service ──
@@ -616,17 +624,56 @@ start_nimbusos() {
   # Build frontend
   if [ -f "$INSTALL_DIR/package.json" ]; then
     cd "$INSTALL_DIR"
+
+    # Asegurar Node.js 20.x (SvelteKit 2 requires Node 18.13+; 20 LTS recomendado)
+    NODE_OK=false
     if command -v node &>/dev/null; then
-      npm install --production 2>/dev/null || true
-      npm run build 2>/dev/null || warn "Frontend build skipped"
-    else
-      log "Installing Node.js..."
-      apt-get install -y -qq nodejs npm 2>/dev/null || true
-      if command -v node &>/dev/null; then
-        npm install --production 2>/dev/null || true
-        npm run build 2>/dev/null || warn "Frontend build skipped"
+      NODE_VER=$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)
+      if [[ -n "$NODE_VER" && "$NODE_VER" -ge 18 ]]; then
+        NODE_OK=true
+        ok "Node.js $(node -v) already installed"
+      else
+        warn "Node.js $(node -v) too old — installing Node 20 LTS"
       fi
     fi
+
+    if [[ "$NODE_OK" != true ]]; then
+      log "Installing Node.js 20 LTS from NodeSource..."
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>&1 | grep -v "^$" || true
+      apt-get install -y -qq nodejs
+      if command -v node &>/dev/null; then
+        ok "Node.js $(node -v) installed"
+      else
+        err "Node.js installation failed — frontend cannot be built"
+        return 1
+      fi
+    fi
+
+    log "Installing frontend dependencies (npm install, ~1-2 min)..."
+    if npm install --no-audit --no-fund --loglevel=error; then
+      ok "Frontend dependencies installed"
+    else
+      err "npm install failed — check $INSTALL_DIR for errors"
+      return 1
+    fi
+
+    log "Building frontend (vite build, ~30-60s)..."
+    if npm run build 2>&1 | tail -5; then
+      if [ -d "$INSTALL_DIR/dist" ] && [ -f "$INSTALL_DIR/dist/index.html" ]; then
+        ok "Frontend built successfully ($(du -sh $INSTALL_DIR/dist | cut -f1))"
+      else
+        err "Build completed but dist/index.html not found"
+        return 1
+      fi
+    else
+      err "Frontend build failed"
+      return 1
+    fi
+
+    # El user nimbus debe ser dueño del dist/ (lo sirve el daemon)
+    chown -R $NIMBUS_USER:$NIMBUS_USER "$INSTALL_DIR/dist"
+  else
+    warn "package.json not found — skipping frontend build"
   fi
 
   systemctl start nimos-daemon 2>/dev/null || true
