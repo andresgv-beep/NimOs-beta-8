@@ -1,0 +1,21 @@
+[Unit]
+Description=NimOS Daemon
+Documentation=https://github.com/andresgv-beep/NimOs-beta-7
+After=local-fs.target zfs-mount.service zfs-import.target
+Before=nimbusos.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/opt/nimbusos/daemon/nimos-daemon
+Restart=always
+RestartSec=3
+TimeoutStartSec=120
+
+# Logging
+StandardOutput=append:/var/log/nimbusos/daemon.log
+StandardError=append:/var/log/nimbusos/daemon-error.log
+
+[Install]
+WantedBy=multi-user.target
