@@ -196,20 +196,33 @@
 </div>
 
 <style>
+  /* ─── Window frame con bevel en esquina inferior-derecha ─────
+     Técnica: la .window es el "borde" (color del marco), y el .content
+     interno tiene el mismo clip-path con 1px menos.
+     Así el marco queda visible incluso en la diagonal biselada. */
   .window {
     position: fixed;
-    border: 1px solid var(--window-border);
-    box-shadow: var(--window-shadow);
     display: flex;
     flex-direction: column;
-    background: var(--bg);
+    background: var(--border-bright);       /* color del marco */
+    padding: 1px;                             /* grosor del borde */
     animation: win-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
-    overflow: hidden;
+    box-shadow: 0 0 24px rgba(0, 255, 159, 0.06);
+    /* Bevel 14px en la esquina inferior-derecha (opuesta al sidebar) */
+    clip-path: polygon(
+      0 0,
+      100% 0,
+      100% calc(100% - 14px),
+      calc(100% - 14px) 100%,
+      0 100%
+    );
   }
   .window.dragging { user-select: none; }
   .window.maximized {
-    border: none !important;
+    background: var(--bg) !important;
+    padding: 0 !important;
     box-shadow: none !important;
+    clip-path: none !important;
     left: 0 !important;
     top: 0 !important;
     width: calc(100vw / var(--ui-zoom, 1)) !important;
@@ -231,6 +244,18 @@
     flex: 1;
     overflow: hidden;
     min-height: 0;
+    background: var(--bg);
+    /* Mismo clip-path que la .window pero 1px menos: así el marco queda visible */
+    clip-path: polygon(
+      0 0,
+      100% 0,
+      100% calc(100% - 13px),
+      calc(100% - 13px) 100%,
+      0 100%
+    );
+  }
+  .window.maximized .content {
+    clip-path: none !important;
   }
 
   .placeholder {
@@ -261,8 +286,8 @@
 
   .resize-handle {
     position: absolute;
-    bottom: 0;
-    right: 0;
+    bottom: 12px;  /* movido hacia dentro por el bevel de 14px */
+    right: 12px;
     width: 16px;
     height: 16px;
     cursor: nwse-resize;
@@ -271,8 +296,8 @@
   .resize-handle::before {
     content: '';
     position: absolute;
-    right: 3px;
-    bottom: 3px;
+    right: 0;
+    bottom: 0;
     width: 8px;
     height: 8px;
     background:
