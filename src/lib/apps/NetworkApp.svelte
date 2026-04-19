@@ -1,16 +1,15 @@
 <script>
   /**
-   * NetworkApp · Remote Access (v3 · Fase A)
-   * ──────────────────────────────────────────────────
-   * Migración desde Beta 7 NetworkPanel.svelte (1109 líneas).
+   * NetworkApp · Remote Access (v3 · según mockups oficiales)
+   * ────────────────────────────────────────────────────────────
+   * Sub-tabs horizontales: Ports · Router · DDNS · Proxy · Certs
    *
-   * Scope Fase A: solo Remote Access para acceso HTTPS desde fuera.
-   *   - DuckDNS (configuración + estado)
-   *   - Router / UPnP (abrir puerto 443)
-   *   - SSL / HTTPS (Let's Encrypt + activar nginx HTTPS)
-   *   - Setup Steps didácticos
+   * Flujo DDNS correcto según mockup:
+   *   empty state → select provider (grid 4 cards) → form del proveedor → estado activo
    *
-   * Backend endpoints reutilizados (sin cambios):
+   * Puerto 5009 es HTTPS nativo del daemon Go (no 443 + proxy).
+   *
+   * Backend endpoints (idénticos a Beta 7, no tocar):
    *   GET    /api/ddns/status
    *   POST   /api/ddns/config
    *   POST   /api/ddns/test
@@ -22,106 +21,160 @@
    *   POST   /api/router/port
    *   DELETE /api/router/port
    *   POST   /api/router/test
-   *
-   * Fase B (pendiente): Interfaces, DNS, SMB, SSH, FTP, NFS, WebDAV, Firewall, Fail2ban.
+   *   GET    /api/proxy/status
    */
   import { onMount, onDestroy } from 'svelte';
   import { token, hdrs } from '$lib/stores/auth.js';
   import AppShell from '$lib/components/AppShell.svelte';
   import {
     KPICard, SectionHead, BevelButton, IconButton, TextInput,
-    Tab, Badge, LED, EmptyState, Spinner
+    Tab, Badge, LED, EmptyState, Spinner, DenseTable
   } from '$lib/ui';
 
   // ─── State ───
-  let active = 'duckdns';  // sidebar section: 'duckdns' | 'router' | 'ssl'
+  let activeTab = 'ports'; // 'ports' | 'router' | 'ddns' | 'proxy' | 'certs'
 
-  // DDNS data
+  // HTTPS / Ports
+  let httpsEnabled = false;
+  let httpsSaving = false;
+  const HTTPS_PORT = 5009;
+  const HTTP_PORT = 5000;
+
+  // Router / UPnP
+  let routerStatus = {};
+  let routerPorts = [];
+  let routerMsg = '';
+  let routerMsgError = false;
+  let routerTesting = {};
+
+  // Add port form
+  let newPort = '';
+  let newPortProto = 'TCP';
+  let newPortDesc = '';
+
+  // Presets (puertos comunes)
+  const PRESETS = [
+    { label: 'NimOS HTTP',  port: 5000,  proto: 'TCP', desc: 'NimOS HTTP' },
+    { label: 'NimOS HTTPS', port: 5009,  proto: 'TCP', desc: 'NimOS HTTPS' },
+    { label: 'Jellyfin',    port: 8096,  proto: 'TCP', desc: 'Jellyfin' },
+    { label: 'Plex',        port: 32400, proto: 'TCP', desc: 'Plex Media Server' },
+    { label: 'SSH',         port: 22,    proto: 'TCP', desc: 'SSH' },
+  ];
+
+  // DDNS
   let ddnsData = {};
-  let ddnsForm = { provider: 'duckdns', domain: '', token: '', username: '', password: '' };
-  let ddnsEditing = false;
+  let ddnsPhase = 'loading'; // 'loading' | 'empty' | 'select-provider' | 'form' | 'active'
+  let ddnsForm = { provider: '', domain: '', token: '', username: '', password: '' };
   let ddnsSaving = false;
   let ddnsTesting = false;
   let ddnsMsg = '';
   let ddnsMsgError = false;
   let tokenVisible = false;
 
-  // Router (UPnP)
-  let routerStatus = {};
-  let routerPorts = [];
-  let routerLoading = false;
-  let routerMsg = '';
-  let routerMsgError = false;
-  let newPort = '';
-  let newPortProto = 'TCP';
-  let newPortDesc = '';
-  let routerTesting = {};
-
-  // Certs / HTTPS
+  // Cert
   let certData = {};
   let certEmail = '';
   let certRequesting = false;
   let certMsg = '';
   let certMsgError = false;
-  let httpsSaving = false;
-  let httpsPort = 443;
+
+  // Proxy
+  let proxyData = { rules: [] };
 
   // Polling
   let pollInterval;
   let loading = true;
 
   // ─── Derived ───
-  $: httpsEnabled  = certData.https?.running || false;
-  $: sslValid      = certData.ssl?.valid || false;
-  $: certDomain    = ddnsData.config?.domain || certData.config?.ddns?.domain || '';
-  $: externalIp    = certData.ddns?.externalIp || ddnsData.externalIp || '';
-  $: localIp       = certData.localIp || '';
+  $: certDomain = ddnsData.config?.domain || certData.config?.ddns?.domain || '';
+  $: externalIp = certData.ddns?.externalIp || ddnsData.externalIp || '';
+  $: localIp = certData.localIp || routerStatus.internalIp || '';
+  $: sslValid = certData.ssl?.valid || false;
   $: sslExpiryDays = certData.ssl?.expiryDays || 0;
+  $: sslExpiryDate = certData.ssl?.expiryDate || '';
 
-  // Port 443 status: ¿hay regla UPnP activa en el puerto 443?
-  $: port443Open = (routerPorts || []).some(p => parseInt(p.port) === 443 || parseInt(p.externalPort) === 443);
+  $: port5009Open = (routerPorts || []).some(p =>
+    parseInt(p.externalPort || p.port) === HTTPS_PORT
+  );
 
-  // Setup step completion
-  $: stepDdnsDone = !!(ddnsData.config?.enabled && ddnsData.config?.domain);
-  $: stepSslDone  = sslValid;
-  $: stepPortDone = port443Open;
-  $: stepHttpsDone = httpsEnabled;
-
-  // Determinar el paso actual (primer no completado)
-  $: currentStep = !stepDdnsDone ? 1 : !stepSslDone ? 2 : !stepPortDone ? 3 : !stepHttpsDone ? 4 : 5;
-
-  $: stepsCompleted = [stepDdnsDone, stepSslDone, stepPortDone, stepHttpsDone].filter(Boolean).length;
-
-  $: ddnsActive = ddnsData.config?.enabled;
   $: autoUpdate = ddnsData.config?.autoUpdate !== false;
+  $: ddnsActive = ddnsData.config?.enabled && ddnsData.config?.domain;
 
-  // Sync ddnsForm from loaded config
-  $: if (ddnsData.config) {
-    if (!ddnsForm.provider && ddnsData.config.provider) ddnsForm.provider = ddnsData.config.provider;
-    if (!ddnsForm.domain && ddnsData.config.domain)     ddnsForm.domain = ddnsData.config.domain;
-    if (!ddnsForm.token && ddnsData.config.token)       ddnsForm.token = ddnsData.config.token;
+  // Derivar fase de DDNS según estado
+  $: if (ddnsData && Object.keys(ddnsData).length > 0) {
+    if (ddnsActive) {
+      ddnsPhase = 'active';
+    } else if (ddnsPhase === 'loading') {
+      ddnsPhase = 'empty';
+    }
   }
 
-  // ─── API calls ───
+  // Proveedores disponibles
+  const PROVIDERS = [
+    { id: 'duckdns', name: 'DuckDNS',  desc: 'Gratuito · Subdominio + Token', fields: 'dominio, token' },
+    { id: 'noip',    name: 'No-IP',    desc: 'Gratuito/Premium · Email + Pass', fields: 'hostname, email, contraseña' },
+    { id: 'dynu',    name: 'Dynu',     desc: 'Gratuito · Hostname + Password', fields: 'hostname, password' },
+    { id: 'freedns', name: 'FreeDNS',  desc: 'Gratuito · Solo Update Key',     fields: 'update key' },
+  ];
+
+  // ─── API ───
   async function loadAll() {
     try {
-      const [ddns, certs, routerS, routerP] = await Promise.all([
+      const [ddns, certs, routerS, routerP, proxy] = await Promise.all([
         fetch('/api/ddns/status',           { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
         fetch('/api/remote-access/status',  { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
         fetch('/api/router/status',         { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
         fetch('/api/router/ports',          { headers: hdrs() }).then(r => r.json()).catch(() => ({ ports: [] })),
+        fetch('/api/proxy/status',          { headers: hdrs() }).then(r => r.json()).catch(() => ({ rules: [] })),
       ]);
       ddnsData     = ddns || {};
       certData     = certs || {};
       routerStatus = routerS || {};
       routerPorts  = routerP?.ports || [];
+      proxyData    = proxy || { rules: [] };
+      httpsEnabled = certs.https?.running || certs.https?.enabled || false;
     } catch (e) {
       console.error('[NetworkApp] loadAll failed', e);
     }
     loading = false;
   }
 
-  // ─── DDNS handlers ───
+  // ─── HTTPS toggle ───
+  async function toggleHttps(enable) {
+    httpsSaving = true;
+    try {
+      await fetch('/api/remote-access/enable-https', {
+        method: 'POST',
+        headers: { ...hdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: certDomain, port: HTTPS_PORT, enabled: enable }),
+      });
+      await loadAll();
+    } catch (e) { console.error('toggleHttps failed', e); }
+    httpsSaving = false;
+  }
+
+  // ─── DDNS ───
+  function selectProvider(pid) {
+    ddnsForm = { provider: pid, domain: '', token: '', username: '', password: '' };
+    ddnsMsg = '';
+    ddnsMsgError = false;
+    ddnsPhase = 'form';
+  }
+
+  function goToSelectProvider() {
+    ddnsPhase = 'select-provider';
+    ddnsMsg = '';
+  }
+
+  function cancelDdnsForm() {
+    ddnsMsg = '';
+    if (ddnsActive) {
+      ddnsPhase = 'active';
+    } else {
+      ddnsPhase = 'empty';
+    }
+  }
+
   async function saveDdns() {
     const p = ddnsForm.provider;
     if (!p) { ddnsMsg = 'Selecciona un proveedor'; ddnsMsgError = true; return; }
@@ -149,8 +202,8 @@
       if (data.ok) {
         ddnsMsg = 'Guardado correctamente';
         ddnsMsgError = false;
-        ddnsEditing = false;
         await loadAll();
+        ddnsPhase = 'active';
       } else {
         ddnsMsg = data.error || 'Error al guardar';
         ddnsMsgError = true;
@@ -173,7 +226,7 @@
       });
       const data = await res.json();
       if (data.ok) {
-        ddnsMsg = 'Conexión exitosa: ' + (data.result || 'OK');
+        ddnsMsg = 'Conexión exitosa' + (data.result ? ': ' + data.result : '');
         ddnsMsgError = false;
       } else {
         ddnsMsg = data.error || 'Falló la prueba';
@@ -187,19 +240,17 @@
   }
 
   async function disableDdns() {
-    if (!confirm('¿Desactivar DuckDNS? El dominio dejará de actualizarse.')) return;
+    if (!confirm('¿Desactivar DDNS? El dominio dejará de actualizarse.')) return;
     try {
       await fetch('/api/ddns/config', {
         method: 'POST',
         headers: { ...hdrs(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: false }),
       });
-      ddnsMsg = 'DDNS desactivado';
-      ddnsMsgError = false;
       await loadAll();
+      ddnsPhase = 'empty';
     } catch {
-      ddnsMsg = 'Error';
-      ddnsMsgError = true;
+      ddnsMsg = 'Error al desactivar'; ddnsMsgError = true;
     }
   }
 
@@ -212,12 +263,21 @@
         body: JSON.stringify({ ...ddnsData.config, autoUpdate: !current }),
       });
       await loadAll();
-    } catch (e) {
-      console.error('Toggle auto-update failed', e);
-    }
+    } catch (e) { console.error('Toggle auto-update failed', e); }
   }
 
-  // ─── Router (UPnP) handlers ───
+  function editDdns() {
+    ddnsForm = {
+      provider: ddnsData.config?.provider || '',
+      domain:   ddnsData.config?.domain   || '',
+      token:    ddnsData.config?.token    || '',
+      username: ddnsData.config?.username || '',
+      password: '',
+    };
+    ddnsPhase = 'form';
+  }
+
+  // ─── Router / UPnP ───
   async function addPort() {
     if (!newPort) return;
     routerMsg = '';
@@ -235,24 +295,18 @@
       if (d.ok) {
         routerMsg = `Puerto ${newPort}/${newPortProto} abierto`;
         routerMsgError = false;
-        newPort = '';
-        newPortDesc = '';
+        newPort = ''; newPortDesc = '';
         await loadAll();
       } else {
-        routerMsg = d.error || 'Error';
-        routerMsgError = true;
+        routerMsg = d.error || 'Error'; routerMsgError = true;
       }
-    } catch {
-      routerMsg = 'Error de conexión';
-      routerMsgError = true;
-    }
+    } catch { routerMsg = 'Error de conexión'; routerMsgError = true; }
   }
 
-  async function addPort443() {
-    newPort = '443';
-    newPortProto = 'TCP';
-    newPortDesc = 'NimOS HTTPS';
-    await addPort();
+  function applyPreset(preset) {
+    newPort = String(preset.port);
+    newPortProto = preset.proto;
+    newPortDesc = preset.desc;
   }
 
   async function removePort(port, protocol) {
@@ -264,16 +318,9 @@
         body: JSON.stringify({ port: parseInt(port), protocol }),
       });
       const d = await res.json();
-      if (d.ok) {
-        await loadAll();
-      } else {
-        routerMsg = d.error || 'Error';
-        routerMsgError = true;
-      }
-    } catch {
-      routerMsg = 'Error';
-      routerMsgError = true;
-    }
+      if (d.ok) await loadAll();
+      else { routerMsg = d.error || 'Error'; routerMsgError = true; }
+    } catch { routerMsg = 'Error'; routerMsgError = true; }
   }
 
   async function testPort(port) {
@@ -289,37 +336,28 @@
     } catch {
       routerTesting = { ...routerTesting, [port]: 'fail' };
     }
-    setTimeout(() => {
-      routerTesting = { ...routerTesting, [port]: false };
-    }, 5000);
+    setTimeout(() => { routerTesting = { ...routerTesting, [port]: false }; }, 5000);
   }
 
-  // ─── SSL / HTTPS handlers ───
+  // ─── Cert ───
   async function requestCert() {
-    const domain = ddnsData.config?.domain || certData.config?.ddns?.domain || '';
+    const domain = certDomain;
     if (!domain) {
-      certMsg = 'Configura un dominio DDNS primero';
-      certMsgError = true;
-      return;
+      certMsg = 'Configura un dominio DDNS primero'; certMsgError = true; return;
     }
     if (!certEmail) {
-      certMsg = "Introduce un email para Let's Encrypt";
-      certMsgError = true;
-      return;
+      certMsg = "Introduce un email para Let's Encrypt"; certMsgError = true; return;
     }
-    certRequesting = true;
-    certMsg = '';
+    certRequesting = true; certMsg = '';
     try {
       const provider = ddnsData.config?.provider || '';
       const dnsToken = ddnsData.config?.token || '';
       const useDns = provider === 'duckdns' && dnsToken;
-
       const res = await fetch('/api/remote-access/request-ssl', {
         method: 'POST',
         headers: { ...hdrs(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          domain,
-          email: certEmail,
+          domain, email: certEmail,
           method: useDns ? 'dns' : 'standalone',
           provider: useDns ? 'duckdns' : '',
           dnsToken: useDns ? dnsToken : '',
@@ -327,33 +365,13 @@
       });
       const data = await res.json();
       if (data.ok) {
-        certMsg = 'Certificado obtenido correctamente';
-        certMsgError = false;
+        certMsg = 'Certificado obtenido'; certMsgError = false;
         await loadAll();
       } else {
-        certMsg = data.error || 'Error al solicitar certificado';
-        certMsgError = true;
+        certMsg = data.error || 'Error al solicitar'; certMsgError = true;
       }
-    } catch {
-      certMsg = 'Error de conexión';
-      certMsgError = true;
-    }
+    } catch { certMsg = 'Error de conexión'; certMsgError = true; }
     certRequesting = false;
-  }
-
-  async function toggleHttps(enable) {
-    httpsSaving = true;
-    try {
-      await fetch('/api/remote-access/enable-https', {
-        method: 'POST',
-        headers: { ...hdrs(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: certDomain, port: httpsPort, enabled: enable }),
-      });
-      await loadAll();
-    } catch (e) {
-      console.error('HTTPS toggle failed', e);
-    }
-    httpsSaving = false;
   }
 
   // ─── Helpers ───
@@ -366,14 +384,8 @@
     return 'hace ' + Math.floor(diff / 86400) + 'd';
   }
 
-  function copyUrl() {
-    const url = `https://${certDomain}`;
-    navigator.clipboard?.writeText(url);
-  }
-
-  function openUrl() {
-    const url = `https://${certDomain}`;
-    window.open(url, '_blank');
+  function copyText(text) {
+    navigator.clipboard?.writeText(text);
   }
 
   // ─── Lifecycle ───
@@ -381,7 +393,7 @@
     let attempts = 0;
     while (!$token && attempts < 10) { await new Promise(r => setTimeout(r, 200)); attempts++; }
     await loadAll();
-    pollInterval = setInterval(loadAll, 15000); // 15s polling (DDNS no cambia tan rápido)
+    pollInterval = setInterval(loadAll, 15000);
   });
 
   onDestroy(() => { if (pollInterval) clearInterval(pollInterval); });
@@ -391,70 +403,45 @@
   appId="network"
   title="Network"
   headerIcon="⚡"
-  pathSegments={['network', 'remote-access', active]}
+  pathSegments={['network', 'remote-access', activeTab]}
   sections={[
     {
-      label: 'Remote Access',
+      label: 'Red',
       items: [
-        { id: 'duckdns', label: 'DuckDNS',       keyHint: '1' },
-        { id: 'router',  label: 'Router / UPnP', keyHint: '2' },
-        { id: 'ssl',     label: 'SSL / HTTPS',   keyHint: '3' },
-      ],
-    },
-    {
-      label: 'Próximamente',
-      items: [
-        { id: '_iface',    label: 'Interfaces',  keyHint: 'I', disabled: true },
-        { id: '_dns',      label: 'DNS',         keyHint: 'D', disabled: true },
-        { id: '_firewall', label: 'Firewall',    keyHint: 'F', disabled: true },
-        { id: '_services', label: 'Servicios',   disabled: true },
+        { id: '_iface',    label: 'Interfaces',    keyHint: 'I', disabled: true },
+        { id: '_services', label: 'Services',      keyHint: 'S', disabled: true },
+        { id: 'remote',    label: 'Remote Access', keyHint: 'R' },
+        { id: '_security', label: 'Security',      keyHint: 'F', disabled: true },
       ],
     },
   ]}
-  bind:active
+  active="remote"
 >
 
-  <!-- KPIs globales -->
-  <div class="na-kpis">
-    <KPICard
-      label="IP pública"
-      value={externalIp || '—'}
-      unit=""
-      state={externalIp ? 'detectada' : 'desconocida'}
-      stateVariant={externalIp ? 'ok' : 'warn'}
-      valueVariant={externalIp ? 'accent' : 'default'}
-      bracketVariant={externalIp ? 'accent' : 'warn'}
-    />
-    <KPICard
-      label="DuckDNS"
-      value={certDomain ? certDomain.split('.')[0] : '—'}
-      unit={certDomain ? '.' + certDomain.split('.').slice(1).join('.') : ''}
-      state={ddnsActive ? 'online' : 'inactivo'}
-      stateVariant={ddnsActive ? 'ok' : 'warn'}
-      valueVariant={ddnsActive ? 'accent' : 'default'}
-      bracketVariant={ddnsActive ? 'accent' : 'warn'}
-    />
-    <KPICard
-      label="SSL / HTTPS"
-      value={sslValid ? "Let's Encrypt" : 'Sin cert'}
-      unit=""
-      state={sslValid ? 'válido' : 'falta emitir'}
-      stateVariant={sslValid ? 'ok' : 'warn'}
-      valueVariant={sslValid ? 'accent' : 'default'}
-      bracketVariant={sslValid ? 'accent' : 'warn'}
-    />
-    <KPICard
-      label="Puerto 443"
-      value={port443Open ? 'Abierto' : 'Cerrado'}
-      unit=""
-      state={port443Open ? 'ok' : 'pendiente'}
-      stateVariant={port443Open ? 'ok' : 'warn'}
-      valueVariant={port443Open ? 'accent' : 'warn'}
-      bracketVariant={port443Open ? 'accent' : 'warn'}
-    />
+  <!-- Sub-tabs horizontales -->
+  <div class="na-subtabs">
+    <Tab active={activeTab === 'ports'}  onClick={() => activeTab = 'ports'}>
+      Ports
+      {#if httpsEnabled}<Badge size="sm" variant="accent">on</Badge>{/if}
+    </Tab>
+    <Tab active={activeTab === 'router'} onClick={() => activeTab = 'router'}>
+      Router
+      {#if routerPorts.length > 0}<Badge size="sm">{routerPorts.length}</Badge>{/if}
+    </Tab>
+    <Tab active={activeTab === 'ddns'}   onClick={() => activeTab = 'ddns'}>
+      DDNS
+      {#if ddnsActive}<Badge size="sm" variant="accent">on</Badge>{/if}
+    </Tab>
+    <Tab active={activeTab === 'proxy'}  onClick={() => activeTab = 'proxy'}>
+      Proxy
+      {#if proxyData.rules?.length > 0}<Badge size="sm">{proxyData.rules.length}</Badge>{/if}
+    </Tab>
+    <Tab active={activeTab === 'certs'}  onClick={() => activeTab = 'certs'}>
+      Certs
+      {#if sslValid}<Badge size="sm" variant="accent">valid</Badge>{/if}
+    </Tab>
   </div>
 
-  <!-- Loading state -->
   {#if loading}
     <div class="na-loading">
       <Spinner label="Cargando configuración de red..." />
@@ -463,524 +450,481 @@
 
   <div class="na-scroll">
 
-    <!-- URL final destacada -->
-    {#if certDomain}
-      <div class="url-box" class:ready={stepHttpsDone}>
-        <span class="url-box-label">
-          ▸ {stepHttpsDone ? 'Tu URL de acceso remoto' : 'URL objetivo (aún no funcional)'}
-        </span>
-        <div class="url-row">
-          <span class="url">
-            <span class="proto">https://</span><span class="host">{certDomain}</span>
+    <!-- ═══ PORTS ═══ -->
+    {#if activeTab === 'ports'}
+      <div class="section">
+        <SectionHead>HTTPS Server</SectionHead>
+
+        <div class="status-bar cols-2">
+          <div class="status-cell">
+            <div class="sc-label">Estado</div>
+            <div class="sc-value">
+              <LED size={7} variant={httpsEnabled ? 'ok' : 'off'} />
+              <span class:tc-accent={httpsEnabled}>{httpsEnabled ? 'Running' : 'Stopped'}</span>
+            </div>
+          </div>
+          <div class="status-cell">
+            <div class="sc-label">Puerto</div>
+            <div class="sc-value mono">{HTTPS_PORT}</div>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle" class:on={httpsEnabled} on:click={() => toggleHttps(!httpsEnabled)} role="button" tabindex="0"
+               on:keydown={(e) => e.key === 'Enter' && toggleHttps(!httpsEnabled)}>
+            <div class="toggle-track">
+              <div class="toggle-thumb"></div>
+            </div>
+          </div>
+          <span class="toggle-label">
+            HTTPS {httpsEnabled ? 'activo' : 'inactivo'} en puerto <b class="mono">{HTTPS_PORT}</b>
+            {#if httpsSaving}<span class="tc-mute"> · guardando...</span>{/if}
           </span>
-          <IconButton size="sm" title="Copiar" onClick={copyUrl}>⎘</IconButton>
-          <IconButton size="sm" title="Abrir" onClick={openUrl} disabled={!stepHttpsDone}>↗</IconButton>
+        </div>
+
+        {#if !sslValid && !httpsEnabled}
+          <div class="msg warn">⚠ Necesitas un certificado SSL válido antes de activar HTTPS. Ve a la pestaña <b>Certs</b>.</div>
+        {/if}
+      </div>
+
+      <div class="section">
+        <SectionHead>Detalles de conexión</SectionHead>
+
+        <div class="detail-rows">
+          <div class="detail-row">
+            <div class="dr-label">Local</div>
+            <div class="dr-value">
+              <code>http://{localIp || 'IP_LOCAL'}:{HTTP_PORT}</code>
+              <IconButton size="sm" title="Copiar" onClick={() => copyText(`http://${localIp}:${HTTP_PORT}`)}>⎘</IconButton>
+            </div>
+          </div>
+          {#if certDomain}
+            <div class="detail-row">
+              <div class="dr-label">Remote HTTP</div>
+              <div class="dr-value">
+                <code>http://{certDomain}:{HTTP_PORT}</code>
+                <IconButton size="sm" title="Copiar" onClick={() => copyText(`http://${certDomain}:${HTTP_PORT}`)}>⎘</IconButton>
+              </div>
+            </div>
+            <div class="detail-row">
+              <div class="dr-label">Remote HTTPS</div>
+              <div class="dr-value">
+                <code class="tc-accent">https://{certDomain}:{HTTPS_PORT}</code>
+                <IconButton size="sm" title="Copiar" onClick={() => copyText(`https://${certDomain}:${HTTPS_PORT}`)}>⎘</IconButton>
+                {#if httpsEnabled}
+                  <IconButton size="sm" title="Abrir" onClick={() => window.open(`https://${certDomain}:${HTTPS_PORT}`, '_blank')}>↗</IconButton>
+                {/if}
+              </div>
+            </div>
+          {:else}
+            <div class="msg">Configura un dominio DDNS en la pestaña <b>DDNS</b> para obtener URL de acceso remoto.</div>
+          {/if}
         </div>
       </div>
     {/if}
 
-    <!-- Setup Steps -->
-    <div class="na-section">
-      <SectionHead count="· {stepsCompleted}/4 pasos">Setup acceso remoto</SectionHead>
+    <!-- ═══ ROUTER ═══ -->
+    {#if activeTab === 'router'}
+      <div class="section">
+        <SectionHead>Router · UPnP</SectionHead>
 
-      <div class="steps">
-
-        <!-- Paso 1: DDNS -->
-        <div class="step" class:done={stepDdnsDone} class:current={currentStep === 1}>
-          <div class="step-num">
-            {#if stepDdnsDone}✓{:else}1{/if}
+        <div class="status-bar cols-3">
+          <div class="status-cell">
+            <div class="sc-label">Estado</div>
+            <div class="sc-value">
+              <LED size={7} variant={routerStatus.upnpAvailable ? 'ok' : 'warn'} />
+              <span>{routerStatus.upnpAvailable ? 'Detectado' : 'No UPnP'}</span>
+            </div>
           </div>
-          <div class="step-body">
-            <div class="step-title">Configurar DuckDNS</div>
-            <div class="step-hint">
-              {#if stepDdnsDone}
-                Dominio <b class="tc-accent">{certDomain}</b> apuntando a tu IP pública.
-              {:else}
-                Configura un dominio DuckDNS gratuito que apunte a tu IP pública dinámica.
-              {/if}
-            </div>
-            <div class="step-status">
-              <LED size={6} variant={stepDdnsDone ? 'ok' : currentStep === 1 ? 'warn' : 'off'} />
-              <span>
-                {#if stepDdnsDone}
-                  completado{ddnsData.lastUpdate ? ` · ${fmtRelative(ddnsData.lastUpdate)}` : ''}
-                {:else if currentStep === 1}
-                  acción requerida
-                {:else}
-                  pendiente
-                {/if}
-              </span>
-            </div>
-            {#if currentStep === 1}
-              <div class="step-actions">
-                <BevelButton variant="primary" size="sm" onClick={() => active = 'duckdns'}>
-                  ▸ Configurar ahora
-                </BevelButton>
-              </div>
-            {/if}
+          <div class="status-cell">
+            <div class="sc-label">IP Local</div>
+            <div class="sc-value mono">{localIp || '—'}</div>
+          </div>
+          <div class="status-cell">
+            <div class="sc-label">IP Externa</div>
+            <div class="sc-value mono tc-accent">{externalIp || '—'}</div>
           </div>
         </div>
 
-        <!-- Paso 2: SSL -->
-        <div class="step" class:done={stepSslDone} class:current={currentStep === 2}>
-          <div class="step-num">
-            {#if stepSslDone}✓{:else}2{/if}
+        {#if routerStatus.manufacturer || routerStatus.model}
+          <div class="router-info">
+            <span class="k">router</span>
+            <span>{routerStatus.manufacturer || ''} {routerStatus.model || ''}</span>
           </div>
-          <div class="step-body">
-            <div class="step-title">Certificado SSL Let's Encrypt</div>
-            <div class="step-hint">
-              {#if stepSslDone}
-                Certificado emitido para <b class="tc-accent">{certDomain}</b>. Renovación automática.
-              {:else}
-                Solicita un certificado SSL gratuito para poder servir el panel vía HTTPS.
-              {/if}
-            </div>
-            <div class="step-status">
-              <LED size={6} variant={stepSslDone ? 'ok' : currentStep === 2 ? 'warn' : 'off'} />
-              <span>
-                {#if stepSslDone}
-                  válido{sslExpiryDays ? ` · expira en ${sslExpiryDays} días` : ''}
-                {:else if currentStep === 2}
-                  acción requerida
-                {:else}
-                  pendiente del paso {currentStep < 2 ? 1 : '—'}
-                {/if}
-              </span>
-            </div>
-            {#if currentStep === 2}
-              <div class="step-actions">
-                <BevelButton variant="primary" size="sm" onClick={() => active = 'ssl'}>
-                  ▸ Emitir certificado
-                </BevelButton>
-              </div>
-            {/if}
-          </div>
-        </div>
-
-        <!-- Paso 3: Puerto 443 -->
-        <div class="step" class:done={stepPortDone} class:current={currentStep === 3}>
-          <div class="step-num">
-            {#if stepPortDone}✓{:else}3{/if}
-          </div>
-          <div class="step-body">
-            <div class="step-title">Abrir puerto 443 en el router</div>
-            <div class="step-hint">
-              {#if stepPortDone}
-                Puerto 443 abierto vía UPnP. Tu NAS es alcanzable desde internet.
-              {:else}
-                Abre el puerto 443 (HTTPS) en tu router, preferiblemente con UPnP o manualmente.
-              {/if}
-            </div>
-            <div class="step-status">
-              <LED size={6} variant={stepPortDone ? 'ok' : currentStep === 3 ? 'warn' : 'off'} />
-              <span>
-                {#if stepPortDone}
-                  completado · vía {routerStatus.method || 'UPnP'}
-                {:else if currentStep === 3}
-                  acción requerida
-                {:else}
-                  pendiente
-                {/if}
-              </span>
-            </div>
-            {#if currentStep === 3}
-              <div class="step-actions">
-                <BevelButton variant="primary" size="sm" onClick={addPort443} disabled={!routerStatus.upnpAvailable}>
-                  ▸ Abrir con UPnP
-                </BevelButton>
-                <BevelButton size="sm" onClick={() => active = 'router'}>
-                  Ver router
-                </BevelButton>
-              </div>
-              {#if !routerStatus.upnpAvailable}
-                <div class="step-warn">
-                  UPnP no disponible · abre el puerto manualmente desde la interfaz de tu router
-                </div>
-              {/if}
-            {/if}
-          </div>
-        </div>
-
-        <!-- Paso 4: HTTPS nginx -->
-        <div class="step" class:done={stepHttpsDone} class:current={currentStep === 4}>
-          <div class="step-num">
-            {#if stepHttpsDone}✓{:else}4{/if}
-          </div>
-          <div class="step-body">
-            <div class="step-title">Activar HTTPS en nginx</div>
-            <div class="step-hint">
-              {#if stepHttpsDone}
-                Panel NimOS sirviendo en <b class="tc-accent">https://{certDomain}</b>
-              {:else}
-                Configurar nginx para servir el panel vía HTTPS usando el certificado de Let's Encrypt.
-              {/if}
-            </div>
-            <div class="step-status">
-              <LED size={6} variant={stepHttpsDone ? 'ok' : currentStep === 4 ? 'warn' : 'off'} />
-              <span>
-                {#if stepHttpsDone}
-                  activo · puerto {httpsPort}
-                {:else if currentStep === 4}
-                  acción requerida
-                {:else}
-                  pendiente
-                {/if}
-              </span>
-            </div>
-            {#if currentStep === 4}
-              <div class="step-actions">
-                <BevelButton variant="primary" size="sm" onClick={() => toggleHttps(true)} disabled={httpsSaving}>
-                  {httpsSaving ? '▸ Activando...' : '▸ Activar HTTPS'}
-                </BevelButton>
-              </div>
-            {/if}
-          </div>
-        </div>
-
+        {/if}
       </div>
-    </div>
 
-    <!-- ═══════ SECCIÓN: DUCKDNS ═══════ -->
-    {#if active === 'duckdns'}
-      <div class="na-section">
-        <SectionHead count={ddnsActive ? '· activo' : ''}>Configuración DDNS</SectionHead>
+      <div class="section">
+        <SectionHead count="· {routerPorts.length}">Puertos abiertos</SectionHead>
 
-        {#if ddnsActive && !ddnsEditing}
-          <!-- Estado activo: mostrar info + controls -->
-          <div class="panel">
-            <div class="panel-head">
-              <div class="panel-title">
-                <Badge variant="accent">DuckDNS</Badge>
-                <span class="domain-big">{ddnsData.config.domain}</span>
-              </div>
-              <div class="panel-status">
-                <LED size={7} variant="ok" />
-                <span>activo</span>
-              </div>
-            </div>
-
-            <div class="info-grid">
-              <div class="info-row"><span class="k">proveedor</span><span class="v">{ddnsData.config.provider}</span></div>
-              <div class="info-row"><span class="k">dominio</span><span class="v tc-accent">{ddnsData.config.domain}</span></div>
-              <div class="info-row"><span class="k">ip externa</span><span class="v">{ddnsData.externalIp || '—'}</span></div>
-              <div class="info-row"><span class="k">último update</span><span class="v">{fmtRelative(ddnsData.lastUpdate) || '—'}</span></div>
-              <div class="info-row"><span class="k">auto-update</span><span class="v" class:tc-accent={autoUpdate}>{autoUpdate ? 'sí · cada 5 min' : 'desactivado'}</span></div>
-            </div>
-
-            <div class="actions">
-              <BevelButton size="sm" onClick={testDdns} disabled={ddnsTesting}>
-                {ddnsTesting ? '▸ Probando...' : '↻ Probar ahora'}
-              </BevelButton>
-              <BevelButton size="sm" onClick={toggleAutoUpdate}>
-                {autoUpdate ? 'Desactivar auto' : 'Activar auto'}
-              </BevelButton>
-              <BevelButton size="sm" onClick={() => ddnsEditing = true}>
-                ✎ Editar
-              </BevelButton>
-              <div style="flex:1"></div>
-              <BevelButton variant="danger" size="sm" onClick={disableDdns}>
-                Desactivar
-              </BevelButton>
-            </div>
-
-            {#if ddnsMsg}
-              <div class="msg" class:error={ddnsMsgError}>{ddnsMsg}</div>
-            {/if}
-          </div>
+        {#if routerPorts.length === 0}
+          <EmptyState icon="◌" title="Sin puertos abiertos" hint="Añade un puerto usando los presets o el formulario" />
         {:else}
-          <!-- Formulario -->
-          <div class="panel">
-            <div class="panel-head">
-              <div class="panel-title">
-                <Badge>Configurar</Badge>
-                <span>{ddnsEditing ? 'Editar dominio DDNS' : 'Añadir nuevo dominio'}</span>
-              </div>
-            </div>
-
-            <div class="form-row">
-              <label class="form-label">Proveedor</label>
-              <div class="input-wrap">
-                <select bind:value={ddnsForm.provider}>
-                  <option value="">Seleccionar...</option>
-                  <option value="duckdns">DuckDNS</option>
-                  <option value="noip">No-IP</option>
-                  <option value="dynu">Dynu</option>
-                  <option value="freedns">FreeDNS</option>
-                </select>
-                <span class="caret">▾</span>
-              </div>
-            </div>
-
-            {#if ddnsForm.provider === 'duckdns'}
-              <div class="form-row">
-                <div>
-                  <label class="form-label">Subdominio</label>
-                  <div class="form-hint">tu-nombre.duckdns.org</div>
-                </div>
-                <TextInput bind:value={ddnsForm.domain} placeholder="midominio.duckdns.org" size="sm" />
-              </div>
-              <div class="form-row">
-                <div>
-                  <label class="form-label">Token</label>
-                  <div class="form-hint">duckdns.org tras login</div>
-                </div>
-                <div class="input-with-eye">
-                  <TextInput
-                    bind:value={ddnsForm.token}
-                    placeholder="Token de DuckDNS"
-                    type={tokenVisible ? 'text' : 'password'}
-                    size="sm"
-                  />
-                  <IconButton size="sm" title="Mostrar/ocultar" onClick={() => tokenVisible = !tokenVisible}>
-                    {tokenVisible ? '◉' : '○'}
-                  </IconButton>
+          <DenseTable
+            columns="80px 60px 1fr 1fr 180px"
+            headers={[
+              { label: 'Puerto' },
+              { label: 'Proto' },
+              { label: 'Destino' },
+              { label: 'Descripción' },
+              { label: 'Acciones', align: 'right' },
+            ]}
+          >
+            {#each routerPorts as p}
+              <div class="tr-row">
+                <div class="mono tc-accent">{p.externalPort || p.port}</div>
+                <div><Badge size="sm" variant={p.protocol === 'TCP' ? 'info' : 'warn'}>{p.protocol || 'TCP'}</Badge></div>
+                <div class="dim mono">{p.internalIp || localIp || '—'}:{p.internalPort || p.port}</div>
+                <div class="dim">{p.description || '—'}</div>
+                <div class="actions-cell">
+                  {#if routerTesting[p.externalPort || p.port] === 'testing'}
+                    <Badge size="sm" variant="warn">probando...</Badge>
+                  {:else if routerTesting[p.externalPort || p.port] === 'ok'}
+                    <Badge size="sm" variant="accent">accesible</Badge>
+                  {:else if routerTesting[p.externalPort || p.port] === 'fail'}
+                    <Badge size="sm" variant="crit">no accesible</Badge>
+                  {/if}
+                  <IconButton size="sm" title="Probar" onClick={() => testPort(p.externalPort || p.port)}>↻</IconButton>
+                  <IconButton size="sm" variant="danger" title="Cerrar" onClick={() => removePort(p.externalPort || p.port, p.protocol || 'TCP')}>×</IconButton>
                 </div>
               </div>
-            {:else if ddnsForm.provider === 'noip'}
-              <div class="form-row">
-                <label class="form-label">Hostname</label>
-                <TextInput bind:value={ddnsForm.domain} placeholder="midominio.ddns.net" size="sm" />
-              </div>
-              <div class="form-row">
-                <label class="form-label">Email</label>
-                <TextInput bind:value={ddnsForm.username} placeholder="tu@email.com" size="sm" />
-              </div>
-              <div class="form-row">
-                <label class="form-label">Contraseña</label>
-                <TextInput bind:value={ddnsForm.password} type="password" size="sm" />
-              </div>
-            {:else if ddnsForm.provider === 'dynu'}
-              <div class="form-row">
-                <label class="form-label">Hostname</label>
-                <TextInput bind:value={ddnsForm.domain} placeholder="midominio.dynu.net" size="sm" />
-              </div>
-              <div class="form-row">
-                <label class="form-label">Password</label>
-                <TextInput bind:value={ddnsForm.token} type="password" size="sm" />
-              </div>
-            {:else if ddnsForm.provider === 'freedns'}
-              <div class="form-row">
-                <label class="form-label">Update Key</label>
-                <TextInput bind:value={ddnsForm.token} size="sm" />
-              </div>
-            {/if}
+            {/each}
+          </DenseTable>
+        {/if}
+      </div>
 
-            {#if ddnsForm.provider}
-              <div class="actions">
-                <BevelButton size="sm" onClick={testDdns} disabled={ddnsTesting}>
-                  {ddnsTesting ? '▸ Probando...' : '↻ Probar'}
-                </BevelButton>
-                <BevelButton variant="primary" size="sm" onClick={saveDdns} disabled={ddnsSaving}>
-                  {ddnsSaving ? '▸ Guardando...' : '▸ Guardar'}
-                </BevelButton>
-                {#if ddnsEditing}
-                  <BevelButton size="sm" onClick={() => { ddnsEditing = false; ddnsMsg = ''; }}>
-                    Cancelar
-                  </BevelButton>
-                {/if}
-              </div>
-            {/if}
+      <div class="section">
+        <SectionHead>Presets rápidos</SectionHead>
+        <div class="presets">
+          {#each PRESETS as preset}
+            <button class="preset-chip" on:click={() => applyPreset(preset)}>
+              {preset.label} <span class="mono tc-mute">({preset.port})</span>
+            </button>
+          {/each}
+        </div>
 
-            {#if ddnsMsg}
-              <div class="msg" class:error={ddnsMsgError}>{ddnsMsg}</div>
-            {/if}
+        <div class="port-form">
+          <div class="pf-field">
+            <label class="form-label">Puerto</label>
+            <TextInput bind:value={newPort} placeholder="5009" size="sm" />
           </div>
+          <div class="pf-field">
+            <label class="form-label">Protocolo</label>
+            <div class="input-wrap">
+              <select bind:value={newPortProto}>
+                <option value="TCP">TCP</option>
+                <option value="UDP">UDP</option>
+              </select>
+              <span class="caret">▾</span>
+            </div>
+          </div>
+          <div class="pf-field wide">
+            <label class="form-label">Descripción</label>
+            <TextInput bind:value={newPortDesc} placeholder="NimOS" size="sm" />
+          </div>
+          <div class="pf-field">
+            <BevelButton variant="primary" size="sm" onClick={addPort} disabled={!newPort || !routerStatus.upnpAvailable}>
+              ▸ Abrir
+            </BevelButton>
+          </div>
+        </div>
+
+        {#if !routerStatus.upnpAvailable}
+          <div class="msg warn">⚠ UPnP no disponible. Abre los puertos manualmente desde la interfaz de tu router.</div>
+        {/if}
+
+        {#if routerMsg}
+          <div class="msg" class:error={routerMsgError}>{routerMsg}</div>
         {/if}
       </div>
     {/if}
 
-    <!-- ═══════ SECCIÓN: ROUTER / UPNP ═══════ -->
-    {#if active === 'router'}
-      <div class="na-section">
-        <SectionHead count={routerStatus.upnpAvailable ? '· UPnP activo' : '· sin UPnP'}>
-          Router / UPnP
-        </SectionHead>
+    <!-- ═══ DDNS ═══ -->
+    {#if activeTab === 'ddns'}
 
-        <div class="panel">
-          <div class="panel-head">
-            <div class="panel-title">
-              <Badge variant={routerStatus.upnpAvailable ? 'accent' : 'warn'}>
-                {routerStatus.upnpAvailable ? 'UPnP' : 'manual'}
-              </Badge>
-              <span>{routerStatus.model || routerStatus.manufacturer || 'Router'}</span>
-            </div>
-            <div class="panel-status">
-              <LED size={7} variant={routerStatus.upnpAvailable ? 'ok' : 'warn'} />
-              <span>{routerStatus.upnpAvailable ? 'disponible' : 'no disponible'}</span>
-            </div>
-          </div>
+      <!-- Fase: Active (estado actual) -->
+      {#if ddnsPhase === 'active' && ddnsActive}
+        <div class="section">
+          <SectionHead count="· activo">Dynamic DNS</SectionHead>
 
-          <div class="info-grid">
-            <div class="info-row"><span class="k">fabricante</span><span class="v">{routerStatus.manufacturer || '—'}</span></div>
-            <div class="info-row"><span class="k">modelo</span><span class="v">{routerStatus.model || '—'}</span></div>
-            <div class="info-row"><span class="k">ip gateway</span><span class="v">{routerStatus.gateway || '—'}</span></div>
-            <div class="info-row"><span class="k">ip externa</span><span class="v tc-accent">{routerStatus.externalIp || externalIp || '—'}</span></div>
-          </div>
-        </div>
-
-        <!-- Puertos abiertos -->
-        <div class="panel">
-          <div class="panel-head">
-            <div class="panel-title">
-              <span>Puertos abiertos</span>
-              <Badge size="sm">{routerPorts.length}</Badge>
+          <div class="status-bar cols-3">
+            <div class="status-cell">
+              <div class="sc-label">Proveedor</div>
+              <div class="sc-value">{ddnsData.config.provider}</div>
             </div>
-          </div>
-
-          {#if routerPorts.length === 0}
-            <EmptyState icon="◌" title="Sin puertos abiertos" hint="Usa el formulario de abajo para abrir uno" />
-          {:else}
-            <div class="ports-list">
-              {#each routerPorts as p}
-                <div class="port-row">
-                  <span class="port-num">{p.externalPort || p.port}</span>
-                  <Badge size="sm" variant={p.protocol === 'TCP' ? 'info' : 'warn'}>{p.protocol}</Badge>
-                  <span class="port-desc">{p.description || '—'}</span>
-                  <span class="port-internal">→ {p.internalIp || localIp}:{p.internalPort || p.port}</span>
-                  <div class="port-actions">
-                    {#if routerTesting[p.externalPort || p.port] === 'testing'}
-                      <Badge size="sm" variant="warn">probando...</Badge>
-                    {:else if routerTesting[p.externalPort || p.port] === 'ok'}
-                      <Badge size="sm" variant="accent">accesible</Badge>
-                    {:else if routerTesting[p.externalPort || p.port] === 'fail'}
-                      <Badge size="sm" variant="crit">no accesible</Badge>
-                    {/if}
-                    <IconButton size="sm" title="Probar" onClick={() => testPort(p.externalPort || p.port)}>↻</IconButton>
-                    <IconButton size="sm" variant="danger" title="Cerrar" onClick={() => removePort(p.externalPort || p.port, p.protocol)}>×</IconButton>
-                  </div>
-                </div>
-              {/each}
+            <div class="status-cell">
+              <div class="sc-label">Dominio</div>
+              <div class="sc-value mono tc-accent" style="font-size:12px">{ddnsData.config.domain}</div>
             </div>
-          {/if}
-
-          <!-- Formulario abrir puerto -->
-          <div class="port-form">
-            <div class="pf-field">
-              <label class="form-label">Puerto</label>
-              <TextInput bind:value={newPort} placeholder="443" size="sm" />
-            </div>
-            <div class="pf-field">
-              <label class="form-label">Protocolo</label>
-              <div class="input-wrap">
-                <select bind:value={newPortProto}>
-                  <option value="TCP">TCP</option>
-                  <option value="UDP">UDP</option>
-                </select>
-                <span class="caret">▾</span>
+            <div class="status-cell">
+              <div class="sc-label">Estado</div>
+              <div class="sc-value">
+                <LED size={7} variant="ok" />
+                <span>Activo</span>
               </div>
             </div>
-            <div class="pf-field wide">
-              <label class="form-label">Descripción</label>
-              <TextInput bind:value={newPortDesc} placeholder="NimOS HTTPS" size="sm" />
+          </div>
+
+          <div class="toggle-row">
+            <div class="toggle" class:on={autoUpdate} on:click={toggleAutoUpdate} role="button" tabindex="0"
+                 on:keydown={(e) => e.key === 'Enter' && toggleAutoUpdate()}>
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
             </div>
-            <div class="pf-field">
-              <BevelButton variant="primary" size="sm" onClick={addPort} disabled={!newPort}>
-                ▸ Abrir
-              </BevelButton>
+            <span class="toggle-label">Auto-actualización {autoUpdate ? 'activada' : 'desactivada'}</span>
+          </div>
+
+          <div class="detail-rows">
+            <div class="detail-row">
+              <div class="dr-label">IP externa</div>
+              <div class="dr-value"><code>{externalIp || '—'}</code></div>
+            </div>
+            <div class="detail-row">
+              <div class="dr-label">Última act.</div>
+              <div class="dr-value tc-mute">{fmtRelative(ddnsData.lastUpdate)}{ddnsData.lastLog ? ' · ' + ddnsData.lastLog : ''}</div>
             </div>
           </div>
 
-          {#if routerMsg}
-            <div class="msg" class:error={routerMsgError}>{routerMsg}</div>
+          <div class="actions-row">
+            <BevelButton size="sm" onClick={editDdns}>✎ Editar</BevelButton>
+            <div style="flex:1"></div>
+            <BevelButton variant="danger" size="sm" onClick={disableDdns}>
+              Desactivar DDNS
+            </BevelButton>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Fase: Empty state -->
+      {#if ddnsPhase === 'empty'}
+        <div class="empty-box">
+          <div class="empty-icon">⇄</div>
+          <div class="empty-title">Sin dominios DDNS configurados</div>
+          <div class="empty-desc">Configura un dominio dinámico para acceder a NimOS desde fuera de tu red local.</div>
+          <BevelButton variant="primary" size="sm" onClick={goToSelectProvider}>
+            ▸ Añadir dominio
+          </BevelButton>
+        </div>
+      {/if}
+
+      <!-- Fase: Seleccionar proveedor -->
+      {#if ddnsPhase === 'select-provider'}
+        <div class="section">
+          <SectionHead>Selecciona proveedor DDNS</SectionHead>
+
+          <div class="provider-grid">
+            {#each PROVIDERS as prov}
+              <button
+                class="provider-card"
+                class:selected={ddnsForm.provider === prov.id}
+                on:click={() => selectProvider(prov.id)}
+              >
+                <div class="pc-name">
+                  <span class="pc-dot"></span>
+                  {prov.name}
+                </div>
+                <div class="pc-desc">{prov.desc}</div>
+                <div class="pc-fields">campos: {prov.fields}</div>
+              </button>
+            {/each}
+          </div>
+
+          <div class="actions-row" style="margin-top:14px">
+            <BevelButton size="sm" onClick={() => ddnsPhase = 'empty'}>Cancelar</BevelButton>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Fase: Formulario -->
+      {#if ddnsPhase === 'form'}
+        <div class="section">
+          <SectionHead>Configurar {ddnsForm.provider}</SectionHead>
+
+          {#if ddnsForm.provider === 'duckdns'}
+            <div class="form-group">
+              <label class="form-label">Subdominio</label>
+              <TextInput bind:value={ddnsForm.domain} placeholder="nimosbarraca.duckdns.org" size="sm" />
+              <div class="form-hint">Tu subdominio completo de DuckDNS</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Token</label>
+              <div class="input-with-eye">
+                <TextInput
+                  bind:value={ddnsForm.token}
+                  type={tokenVisible ? 'text' : 'password'}
+                  placeholder="Token de DuckDNS"
+                  size="sm"
+                />
+                <IconButton size="sm" title={tokenVisible ? 'Ocultar' : 'Mostrar'} onClick={() => tokenVisible = !tokenVisible}>
+                  {tokenVisible ? '◉' : '○'}
+                </IconButton>
+              </div>
+              <div class="form-hint">Token de tu cuenta DuckDNS · duckdns.org/domains</div>
+            </div>
+
+          {:else if ddnsForm.provider === 'noip'}
+            <div class="form-group">
+              <label class="form-label">Hostname</label>
+              <TextInput bind:value={ddnsForm.domain} placeholder="midominio.ddns.net" size="sm" />
+              <div class="form-hint">Tu hostname registrado en No-IP</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Email</label>
+              <TextInput bind:value={ddnsForm.username} placeholder="tu@email.com" size="sm" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Contraseña</label>
+              <TextInput bind:value={ddnsForm.password} type="password" size="sm" />
+            </div>
+
+          {:else if ddnsForm.provider === 'dynu'}
+            <div class="form-group">
+              <label class="form-label">Hostname</label>
+              <TextInput bind:value={ddnsForm.domain} placeholder="midominio.dynu.net" size="sm" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Password</label>
+              <TextInput bind:value={ddnsForm.token} type="password" size="sm" />
+            </div>
+
+          {:else if ddnsForm.provider === 'freedns'}
+            <div class="form-group">
+              <label class="form-label">Update Key</label>
+              <TextInput bind:value={ddnsForm.token} placeholder="Update key de FreeDNS" size="sm" />
+              <div class="form-hint">Obtén tu update key desde freedns.afraid.org</div>
+            </div>
           {/if}
+
+          <div class="actions-row">
+            <BevelButton size="sm" onClick={testDdns} disabled={ddnsTesting}>
+              {ddnsTesting ? 'Probando...' : 'Probar conexión'}
+            </BevelButton>
+            <BevelButton variant="primary" size="sm" onClick={saveDdns} disabled={ddnsSaving}>
+              {ddnsSaving ? '▸ Guardando...' : '▸ Guardar'}
+            </BevelButton>
+            <BevelButton size="sm" onClick={cancelDdnsForm}>Cancelar</BevelButton>
+          </div>
+
+          {#if ddnsMsg}
+            <div class="msg" class:ok={!ddnsMsgError} class:error={ddnsMsgError}>{ddnsMsg}</div>
+          {/if}
+        </div>
+      {/if}
+
+    {/if}
+
+    <!-- ═══ PROXY ═══ -->
+    {#if activeTab === 'proxy'}
+      <div class="section">
+        <SectionHead count={proxyData.rules?.length ? `· ${proxyData.rules.length}` : ''}>
+          Reverse Proxy
+        </SectionHead>
+
+        {#if !proxyData.rules || proxyData.rules.length === 0}
+          <EmptyState
+            icon="⇄"
+            title="Sin reglas de proxy"
+            hint="Crea reglas para servir subdominios hacia puertos internos (ej. jellyfin.tu-dominio.duckdns.org → :8096)"
+          />
+        {:else}
+          <div class="proxy-list">
+            {#each proxyData.rules as rule}
+              <div class="proxy-row">
+                <span class="proxy-from mono">{rule.from || rule.subdomain}</span>
+                <span class="proxy-arrow">→</span>
+                <span class="proxy-to mono">{rule.to || rule.target}</span>
+                <IconButton size="sm" variant="danger" title="Eliminar">×</IconButton>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="actions-row" style="margin-top:14px">
+          <BevelButton size="sm" disabled>+ Añadir regla (próximamente)</BevelButton>
         </div>
       </div>
     {/if}
 
-    <!-- ═══════ SECCIÓN: SSL / HTTPS ═══════ -->
-    {#if active === 'ssl'}
-      <div class="na-section">
-        <SectionHead count={sslValid ? '· válido' : '· falta emitir'}>Certificado SSL</SectionHead>
+    <!-- ═══ CERTS ═══ -->
+    {#if activeTab === 'certs'}
+      <div class="section">
+        <SectionHead>SSL Certificate</SectionHead>
 
-        <div class="panel">
-          <div class="panel-head">
-            <div class="panel-title">
-              <Badge variant={sslValid ? 'accent' : 'warn'}>Let's Encrypt</Badge>
-              <span>{certDomain || 'Sin dominio configurado'}</span>
+        {#if sslValid && certDomain}
+          <!-- Cert válido: mostrar info -->
+          <div class="cert-card">
+            <div class="cert-header">
+              <LED size={8} variant="ok" />
+              <span class="cert-status">Válido</span>
+              <span class="cert-days">{sslExpiryDays || '?'} días restantes</span>
             </div>
-            <div class="panel-status">
-              <LED size={7} variant={sslValid ? 'ok' : 'warn'} />
-              <span>{sslValid ? 'válido' : 'no emitido'}</span>
+            <div class="cert-grid">
+              <div class="cert-cell">
+                <div class="cc-label">Dominio</div>
+                <div class="cc-value">{certDomain}</div>
+              </div>
+              <div class="cert-cell">
+                <div class="cc-label">Expira</div>
+                <div class="cc-value">{sslExpiryDate || '—'}</div>
+              </div>
+              <div class="cert-cell">
+                <div class="cc-label">Emisor</div>
+                <div class="cc-value">Let's Encrypt</div>
+              </div>
+              <div class="cert-cell">
+                <div class="cc-label">Renovación</div>
+                <div class="cc-value tc-accent">Automática</div>
+              </div>
             </div>
           </div>
 
-          {#if sslValid}
-            <div class="info-grid">
-              <div class="info-row"><span class="k">dominio</span><span class="v tc-accent">{certDomain}</span></div>
-              <div class="info-row"><span class="k">emisor</span><span class="v">Let's Encrypt</span></div>
-              <div class="info-row"><span class="k">expira</span><span class="v">{sslExpiryDays} días</span></div>
-              <div class="info-row"><span class="k">renovación</span><span class="v tc-accent">automática</span></div>
+          <div class="actions-row">
+            <BevelButton size="sm" onClick={requestCert} disabled={certRequesting}>
+              {certRequesting ? 'Renovando...' : '↻ Renovar ahora'}
+            </BevelButton>
+          </div>
+
+        {:else}
+          <!-- No cert: solicitar -->
+          <div class="cert-missing">
+            <div class="cm-title">Sin certificado SSL</div>
+            <div class="cm-desc">
+              {#if !certDomain}
+                Configura un dominio DDNS antes de solicitar un certificado.
+              {:else}
+                Emite un certificado Let's Encrypt gratuito para <b class="tc-accent">{certDomain}</b>
+              {/if}
             </div>
-          {:else}
-            <div class="form-row">
+          </div>
+
+          {#if certDomain}
+            <div class="form-group">
               <label class="form-label">Email de contacto</label>
               <TextInput bind:value={certEmail} placeholder="tu@email.com" size="sm" />
+              <div class="form-hint">Let's Encrypt usará este email para avisos de expiración</div>
             </div>
-            <div class="form-hint" style="margin-top:-8px">
-              Let's Encrypt usará este email para avisos de expiración. No se comparte.
-            </div>
-            {#if !certDomain}
-              <div class="msg warn">⚠ Configura un dominio DDNS antes de solicitar un certificado SSL</div>
-            {/if}
-            <div class="actions">
+
+            <div class="actions-row">
               <BevelButton
                 variant="primary"
                 size="sm"
                 onClick={requestCert}
-                disabled={certRequesting || !certDomain || !certEmail}
+                disabled={certRequesting || !certEmail}
               >
                 {certRequesting ? '▸ Emitiendo...' : '▸ Emitir certificado'}
               </BevelButton>
             </div>
-          {/if}
-
-          {#if certMsg}
-            <div class="msg" class:error={certMsgError}>{certMsg}</div>
-          {/if}
-        </div>
-
-        <!-- HTTPS nginx -->
-        <div class="panel">
-          <div class="panel-head">
-            <div class="panel-title">
-              <span>HTTPS en nginx</span>
-            </div>
-            <div class="panel-status">
-              <LED size={7} variant={httpsEnabled ? 'ok' : 'off'} />
-              <span>{httpsEnabled ? 'activo' : 'inactivo'}</span>
-            </div>
-          </div>
-
-          <div class="info-grid">
-            <div class="info-row"><span class="k">puerto</span><span class="v">{httpsPort}</span></div>
-            <div class="info-row"><span class="k">dominio</span><span class="v">{certDomain || '—'}</span></div>
-            <div class="info-row"><span class="k">certificado</span><span class="v" class:tc-accent={sslValid}>{sslValid ? 'Let\'s Encrypt' : 'ninguno'}</span></div>
-            <div class="info-row"><span class="k">puerto 443 router</span><span class="v" class:tc-accent={port443Open}>{port443Open ? 'abierto' : 'cerrado'}</span></div>
-          </div>
-
-          <div class="actions">
-            {#if httpsEnabled}
-              <BevelButton variant="danger" size="sm" onClick={() => toggleHttps(false)} disabled={httpsSaving}>
-                {httpsSaving ? '▸ Desactivando...' : '■ Desactivar HTTPS'}
+          {:else}
+            <div class="actions-row">
+              <BevelButton size="sm" onClick={() => activeTab = 'ddns'}>
+                ▸ Ir a DDNS
               </BevelButton>
-            {:else}
-              <BevelButton
-                variant="primary"
-                size="sm"
-                onClick={() => toggleHttps(true)}
-                disabled={httpsSaving || !sslValid || !port443Open}
-              >
-                {httpsSaving ? '▸ Activando...' : '▸ Activar HTTPS'}
-              </BevelButton>
-            {/if}
-          </div>
-
-          {#if !sslValid}
-            <div class="msg warn">Emite primero un certificado SSL para poder activar HTTPS</div>
-          {:else if !port443Open}
-            <div class="msg warn">Abre el puerto 443 del router antes de activar HTTPS</div>
+            </div>
           {/if}
-        </div>
+        {/if}
+
+        {#if certMsg}
+          <div class="msg" class:ok={!certMsgError} class:error={certMsgError}>{certMsg}</div>
+        {/if}
       </div>
     {/if}
 
@@ -989,262 +933,368 @@
 
   <!-- Footer -->
   <svelte:fragment slot="footer">
-    <span><span class="k">domain</span> <span class="v tc-accent">{certDomain || 'no configurado'}</span></span>
+    <span><span class="k">iface</span> <span class="v">eth0</span></span>
     <span class="sep">·</span>
-    <span><span class="k">external</span> <span class="v">{externalIp || '—'}</span></span>
+    <span><span class="k">ip</span> <span class="v">{localIp || '—'}</span></span>
     <span class="sep">·</span>
-    <span><span class="k">setup</span> <span class="v" class:tc-accent={stepsCompleted === 4}>{stepsCompleted}/4</span></span>
+    <span><span class="k">ssl</span> <span class="v" class:tc-accent={sslValid}>{sslValid ? 'valid' : 'none'}</span></span>
+    <span class="sep">·</span>
+    <span><span class="k">ddns</span> <span class="v" class:tc-accent={ddnsActive}>{ddnsActive ? 'active' : 'off'}</span></span>
   </svelte:fragment>
 
   <svelte:fragment slot="footer-right">
-    <span><span class="k">poll</span> <span class="v">15s</span></span>
+    <span><span class="k">https</span> <span class="v" class:tc-accent={httpsEnabled}>:{HTTPS_PORT}</span></span>
   </svelte:fragment>
 
 </AppShell>
 
 <style>
-  /* ─── KPIs row ─── */
-  .na-kpis {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    border-bottom: 1px solid var(--border);
+  /* Sub-tabs */
+  .na-subtabs {
+    display: flex;
+    padding: 0 16px;
     background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    gap: 4px;
     flex-shrink: 0;
   }
-  .na-kpis :global(.kpi) {
-    border-right: 1px solid var(--border);
-  }
-  .na-kpis :global(.kpi:last-child) {
-    border-right: none;
-  }
 
-  /* ─── Loading ─── */
   .na-loading {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 200px;
+    min-height: 300px;
   }
 
-  /* ─── Main scroll ─── */
   .na-scroll {
     flex: 1;
     overflow-y: auto;
     padding: 22px 28px 24px;
     display: flex;
     flex-direction: column;
-    gap: 28px;
+    gap: 26px;
   }
 
-  .na-section {
+  .section {
     display: flex;
     flex-direction: column;
     gap: 14px;
   }
 
-  /* ─── URL box destacado ─── */
-  .url-box {
-    background: var(--bg);
-    border: 1px solid var(--accent);
+  /* Status bar (KPI-like pero inline) */
+  .status-bar {
+    display: grid;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+  }
+  .status-bar.cols-2 { grid-template-columns: 1fr 1fr; }
+  .status-bar.cols-3 { grid-template-columns: repeat(3, 1fr); }
+
+  .status-cell {
+    background: var(--bg-1);
     padding: 14px 18px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    box-shadow: 0 0 12px rgba(0, 255, 159, 0.08);
-    clip-path: polygon(
-      0 0, 100% 0, 100% calc(100% - 10px),
-      calc(100% - 10px) 100%, 0 100%
-    );
-  }
-  .url-box:not(.ready) {
-    border-color: var(--warn);
-    box-shadow: 0 0 12px rgba(255, 184, 0, 0.06);
-  }
-  .url-box-label {
+    gap: 4px;
     font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--accent);
-    text-transform: uppercase;
-    letter-spacing: 1.8px;
   }
-  .url-box:not(.ready) .url-box-label { color: var(--warn); }
-  .url-row {
+  .sc-label {
+    font-size: 9px;
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+  }
+  .sc-value {
+    font-size: 13px;
+    color: var(--fg);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sc-value.mono { font-family: var(--font-mono); }
+
+  /* Toggle */
+  .toggle-row {
     display: flex;
     align-items: center;
     gap: 10px;
-  }
-  .url {
-    flex: 1;
-    font-family: var(--font-mono);
-    font-size: 14px;
-    color: var(--fg);
-    letter-spacing: 0.3px;
-    word-break: break-all;
-  }
-  .url .proto { color: var(--accent); }
-  .url .host  { color: var(--fg); font-weight: 500; }
-
-  /* ─── Setup Steps ─── */
-  .steps {
-    display: flex;
-    flex-direction: column;
-  }
-  .step {
-    display: grid;
-    grid-template-columns: 40px 1fr;
-    gap: 14px;
-    padding: 14px 0;
-    border-bottom: 1px dashed var(--border);
-  }
-  .step:last-child { border-bottom: none; }
-
-  .step-num {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    background: var(--bg);
-    border: 1px solid var(--border-bright);
-    color: var(--fg-mute);
+    padding: 10px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
     font-family: var(--font-mono);
     font-size: 11px;
-    font-weight: 700;
+  }
+  .toggle {
+    cursor: pointer;
+    display: inline-block;
+  }
+  .toggle-track {
+    width: 36px;
+    height: 18px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: all 0.15s;
+  }
+  .toggle-thumb {
+    position: absolute;
+    top: 1px; left: 1px;
+    width: 14px; height: 14px;
+    background: var(--fg-mute);
+    transition: all 0.15s;
+  }
+  .toggle.on .toggle-track {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .toggle.on .toggle-thumb {
+    left: 19px;
+    background: var(--accent);
+    box-shadow: 0 0 6px rgba(0, 255, 159, 0.35);
+  }
+  .toggle-label {
+    color: var(--fg-dim);
+    letter-spacing: 0.3px;
+  }
+  .toggle-label b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  /* Detail rows */
+  .detail-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    padding: 4px;
+    font-family: var(--font-mono);
+  }
+  .detail-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 14px;
+    padding: 8px 12px;
+    align-items: center;
+    font-size: 11px;
+  }
+  .dr-label {
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-size: 9px;
+  }
+  .dr-value {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg);
+  }
+  .dr-value code {
+    font-family: var(--font-mono);
+    padding: 2px 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+  .dr-value code.tc-accent { color: var(--accent); border-color: var(--accent); }
+
+  /* Router */
+  .router-info {
+    padding: 10px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-dim);
+    display: flex;
+    gap: 10px;
+  }
+
+  /* Table rows */
+  .tr-row {
+    display: contents;
+  }
+  .tr-row > * {
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .actions-cell {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .dim { color: var(--fg-dim); }
+  .mono { font-family: var(--font-mono); }
+
+  /* Presets */
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 0;
+  }
+  .preset-chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 5px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border-bright);
+    color: var(--fg-dim);
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all 0.12s;
     clip-path: polygon(
       0 0, calc(100% - 5px) 0, 100% 5px,
       100% 100%, 5px 100%, 0 calc(100% - 5px)
     );
   }
-  .step.done .step-num {
+  .preset-chip:hover {
     border-color: var(--accent);
     color: var(--accent);
-    background: var(--accent-dim);
-  }
-  .step.current .step-num {
-    border-color: var(--warn);
-    color: var(--warn);
-    background: rgba(255, 184, 0, 0.06);
-    animation: pulse-warn-box 1.5s ease-in-out infinite;
-  }
-  @keyframes pulse-warn-box {
-    0%, 100% { box-shadow: 0 0 4px rgba(255, 184, 0, 0.3); }
-    50%      { box-shadow: 0 0 10px rgba(255, 184, 0, 0.5); }
   }
 
-  .step-body {
+  /* Port form */
+  .port-form {
+    display: grid;
+    grid-template-columns: 100px 110px 1fr auto;
+    gap: 10px;
+    align-items: end;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px dashed var(--border);
+  }
+  .pf-field {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding-top: 5px;
   }
-  .step-title {
-    font-size: 12px;
-    color: var(--fg);
-    font-weight: 600;
-    letter-spacing: 0.3px;
-  }
-  .step.done .step-title { color: var(--fg-dim); }
-  .step-hint {
-    font-size: 10px;
-    color: var(--fg-mute);
-    letter-spacing: 0.3px;
-    line-height: 1.5;
-    font-family: var(--font-sans);
-  }
-  .step-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-top: 4px;
-    color: var(--fg-dim);
-  }
-  .step-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-  }
-  .step-warn {
-    margin-top: 8px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--warn);
-    background: rgba(255, 184, 0, 0.04);
-    border-left: 2px solid var(--warn);
-    padding: 6px 10px;
-  }
+  .pf-field.wide { grid-column: span 1; }
 
-  /* ─── Panel ─── */
-  .panel {
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    font-family: var(--font-mono);
-  }
-  .panel-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border);
-  }
-  .panel-title {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 11px;
-    color: var(--fg);
-    letter-spacing: 1.3px;
-    text-transform: uppercase;
-    font-weight: 600;
-  }
-  .panel-status {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 9px;
-    color: var(--fg-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  .domain-big {
-    text-transform: none;
-    color: var(--accent);
-    font-size: 13px;
-    letter-spacing: 0.3px;
-    font-weight: 500;
-  }
-
-  /* ─── Form ─── */
-  .form-row {
-    display: grid;
-    grid-template-columns: 140px 1fr;
-    gap: 14px;
-    align-items: center;
-  }
   .form-label {
+    font-family: var(--font-mono);
     font-size: 10px;
     color: var(--fg-mute);
     text-transform: uppercase;
     letter-spacing: 1.3px;
-    font-family: var(--font-mono);
     display: block;
   }
+
+  /* Provider grid */
+  .provider-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .provider-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: all 0.12s;
+    font-family: var(--font-mono);
+    text-align: left;
+    color: var(--fg-dim);
+  }
+  .provider-card:hover {
+    border-color: var(--border-bright);
+    background: var(--bg-2);
+  }
+  .provider-card.selected {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--fg);
+    box-shadow: 0 0 10px rgba(0, 255, 159, 0.15);
+  }
+  .pc-name {
+    font-size: 13px;
+    color: var(--fg);
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pc-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--fg-mute);
+    display: inline-block;
+  }
+  .provider-card.selected .pc-dot {
+    background: var(--accent);
+    box-shadow: 0 0 5px var(--accent);
+  }
+  .pc-desc {
+    font-size: 10px;
+    color: var(--fg-dim);
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+  }
+  .pc-fields {
+    font-size: 9px;
+    color: var(--fg-mute);
+    letter-spacing: 0.3px;
+  }
+
+  /* Empty state box */
+  .empty-box {
+    text-align: center;
+    padding: 48px 24px;
+    background: var(--bg-1);
+    border: 1px dashed var(--border-bright);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+  }
+  .empty-icon {
+    font-size: 36px;
+    color: var(--fg-mute);
+    font-family: var(--font-mono);
+    margin-bottom: 8px;
+  }
+  .empty-title {
+    font-size: 14px;
+    color: var(--fg);
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .empty-desc {
+    font-size: 11px;
+    color: var(--fg-mute);
+    letter-spacing: 0.3px;
+    max-width: 400px;
+    line-height: 1.5;
+    margin-bottom: 8px;
+  }
+
+  /* Form groups */
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
   .form-hint {
+    font-family: var(--font-mono);
     font-size: 9px;
     color: var(--fg-faint);
     letter-spacing: 0.3px;
-    margin-top: 2px;
-    font-family: var(--font-mono);
   }
+
+  .input-with-eye {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .input-with-eye :global(.nimos-text-input) { flex: 1; }
 
   .input-wrap {
     display: flex;
@@ -1262,142 +1312,153 @@
   .input-wrap:focus-within { border-color: var(--accent); }
   .input-wrap select {
     flex: 1;
-    min-width: 0;
     background: transparent;
     border: none;
     outline: none;
     color: var(--fg);
     font-family: var(--font-mono);
     font-size: 11px;
-    letter-spacing: 0.5px;
     appearance: none;
     cursor: pointer;
   }
-  .input-wrap .caret { color: var(--fg-mute); font-size: 10px; }
+  .input-wrap .caret { color: var(--fg-mute); }
 
-  .input-with-eye {
-    display: flex;
-    gap: 6px;
-    align-items: stretch;
-  }
-  .input-with-eye :global(.nimos-text-input) {
-    flex: 1;
-  }
-
-  /* ─── Actions ─── */
-  .actions {
+  /* Actions row */
+  .actions-row {
     display: flex;
     gap: 8px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
     align-items: center;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
   }
 
-  /* ─── Info grid ─── */
-  .info-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 6px 24px;
-    padding: 4px 0;
-  }
-  .info-row {
-    display: grid;
-    grid-template-columns: 130px 1fr;
-    gap: 10px;
-    font-size: 11px;
-  }
-  .info-row .k {
-    color: var(--fg-mute);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 9px;
-  }
-  .info-row .v {
-    color: var(--fg);
-    font-feature-settings: "tnum";
-  }
-
-  /* ─── Ports list ─── */
-  .ports-list {
+  /* Proxy */
+  .proxy-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    background: var(--bg);
+    gap: 1px;
+    background: var(--border);
     border: 1px solid var(--border);
-    padding: 6px;
   }
-  .port-row {
+  .proxy-row {
     display: grid;
-    grid-template-columns: 60px 60px 1fr 1fr auto;
-    gap: 12px;
+    grid-template-columns: 1fr auto 1fr auto;
+    gap: 14px;
+    padding: 10px 14px;
     align-items: center;
-    padding: 6px 10px;
+    background: var(--bg-1);
     font-family: var(--font-mono);
     font-size: 11px;
-    background: var(--bg-1);
-    border-left: 2px solid var(--accent);
   }
-  .port-num {
+  .proxy-from { color: var(--accent); }
+  .proxy-arrow { color: var(--fg-mute); }
+  .proxy-to { color: var(--fg-dim); }
+
+  /* Certs */
+  .cert-card {
+    background: var(--bg-1);
+    border: 1px solid var(--accent);
+    clip-path: polygon(
+      0 0, 100% 0, 100% calc(100% - 10px),
+      calc(100% - 10px) 100%, 0 100%
+    );
+    box-shadow: 0 0 15px rgba(0, 255, 159, 0.08);
+  }
+  .cert-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .cert-status {
     color: var(--accent);
     font-weight: 600;
-    font-feature-settings: "tnum";
+    letter-spacing: 0.5px;
   }
-  .port-desc {
+  .cert-days {
     color: var(--fg-dim);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .port-internal {
-    color: var(--fg-mute);
+    margin-left: auto;
     font-size: 10px;
   }
-  .port-actions {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-  }
-
-  /* ─── Port form ─── */
-  .port-form {
+  .cert-grid {
     display: grid;
-    grid-template-columns: 100px 110px 1fr auto;
-    gap: 10px;
-    align-items: end;
-    padding: 12px;
-    background: var(--bg);
-    border: 1px dashed var(--border);
+    grid-template-columns: 1fr 1fr;
   }
-  .pf-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .cert-cell {
+    padding: 12px 18px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
   }
-  .pf-field.wide { grid-column: span 1; }
+  .cert-cell:nth-child(2n) { border-right: none; }
+  .cert-cell:nth-child(n+3) { border-bottom: none; }
+  .cc-label {
+    font-size: 9px;
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 4px;
+  }
+  .cc-value {
+    font-size: 11px;
+    color: var(--fg);
+    font-weight: 500;
+    word-break: break-all;
+  }
 
-  /* ─── Mensajes ─── */
+  .cert-missing {
+    padding: 24px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    text-align: center;
+  }
+  .cm-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--fg-dim);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .cm-desc {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-mute);
+    letter-spacing: 0.3px;
+  }
+
+  /* Mensajes */
   .msg {
     font-family: var(--font-mono);
     font-size: 10px;
-    padding: 6px 10px;
-    background: rgba(0, 255, 159, 0.04);
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
     border-left: 2px solid var(--accent);
+    color: var(--fg-dim);
+    letter-spacing: 0.3px;
+  }
+  .msg.ok {
+    border-left-color: var(--accent);
+    background: var(--accent-dim);
     color: var(--accent);
   }
   .msg.error {
-    background: rgba(255, 90, 90, 0.04);
     border-left-color: var(--crit);
+    background: rgba(255, 90, 90, 0.06);
     color: var(--crit);
   }
   .msg.warn {
-    background: rgba(255, 184, 0, 0.04);
     border-left-color: var(--warn);
+    background: rgba(255, 184, 0, 0.06);
     color: var(--warn);
   }
 
-  /* ─── Utility ─── */
+  /* Utility */
   .tc-accent { color: var(--accent); }
-  .tc-crit { color: var(--crit); }
+  .tc-mute   { color: var(--fg-mute); }
   .k { color: var(--fg-faint); }
   .v { color: var(--fg-dim); font-feature-settings: "tnum"; }
   .sep { color: var(--fg-faint); }
