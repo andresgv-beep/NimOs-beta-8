@@ -62,8 +62,8 @@
   let expandedPools = new Set();
   // Menu kebab abierto para un pool (solo uno a la vez)
   let kebabOpenFor = null;
-  // Coordenadas viewport del menú kebab (para posicionar con position:fixed)
-  let kebabPosition = { top: 0, right: 0 };
+  // Coordenadas del menú kebab en coordenadas de document (para position:absolute en body)
+  let kebabPosition = { top: 0, left: 0 };
 
   // Restaurar pool
   let restoring = {};
@@ -162,20 +162,17 @@
       return;
     }
 
-    // Calcular coordenadas del botón para posicionar el menú en viewport
+    // Coordenadas del botón en el document (no viewport)
+    // pageX/pageY son consistentes con position:absolute en body
     if (event && event.currentTarget) {
-      const rect = event.currentTarget.getBoundingClientRect();
+      const btn = event.currentTarget;
+      const rect = btn.getBoundingClientRect();
 
-      // Compensar el CSS zoom aplicado al :root (ui-zoom)
-      // getBoundingClientRect devuelve coords POST-zoom, pero position:fixed
-      // se interpreta PRE-zoom. Dividimos por el zoom para compensar.
-      const zoom = parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom') || '1'
-      ) || 1;
-
+      // El menú se alinea a la derecha del botón, justo debajo
+      // Con absolute + body, añadimos el scroll del documento
       kebabPosition = {
-        top:   (rect.bottom + 4) / zoom,
-        right: (window.innerWidth - rect.right) / zoom,
+        top:  rect.bottom + window.scrollY + 4,
+        left: rect.right + window.scrollX - 220, // 220 = min-width del menú
       };
     }
     kebabOpenFor = poolName;
@@ -297,6 +294,17 @@
   // ─── Click-outside listener para kebab ───
   function onDocClick() {
     kebabOpenFor = null;
+  }
+
+  // Action portal: mueve el elemento al document.body al montarse
+  // Esto lo saca de cualquier contenedor con zoom/transform/clip-path
+  function portal(node) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }
+    };
   }
 
   // ─── Lifecycle ───
@@ -974,7 +982,8 @@
   {#if kebabOpenFor}
     <div
       class="kebab-menu-float"
-      style="top: {kebabPosition.top}px; right: {kebabPosition.right}px"
+      use:portal
+      style="top: {kebabPosition.top}px; left: {kebabPosition.left}px"
       on:click|stopPropagation
       role="menu"
     >
@@ -1192,12 +1201,12 @@
   .pool-kebab:hover { color: var(--accent); }
 
   .kebab-menu-float {
-    position: fixed;
+    position: absolute;
     background: var(--bg);
     border: 1px solid var(--border-bright);
     min-width: 220px;
     padding: 4px;
-    z-index: 1000;
+    z-index: 99999;
     box-shadow: 4px 4px 0 rgba(0,0,0,0.5), 0 0 12px rgba(0,255,159,0.08);
     font-family: var(--font-mono);
     clip-path: polygon(
