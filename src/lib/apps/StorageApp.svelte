@@ -62,6 +62,8 @@
   let expandedPools = new Set();
   // Menu kebab abierto para un pool (solo uno a la vez)
   let kebabOpenFor = null;
+  // Coordenadas viewport del menú kebab (para posicionar con position:fixed)
+  let kebabPosition = { top: 0, right: 0 };
 
   // Restaurar pool
   let restoring = {};
@@ -154,7 +156,23 @@
 
   function toggleKebab(poolName, event) {
     if (event) event.stopPropagation();
-    kebabOpenFor = kebabOpenFor === poolName ? null : poolName;
+
+    if (kebabOpenFor === poolName) {
+      kebabOpenFor = null;
+      return;
+    }
+
+    // Calcular coordenadas del botón para posicionar el menú en viewport
+    if (event && event.currentTarget) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      // Menú alineado a la derecha del botón, 4px por debajo
+      kebabPosition = {
+        top: rect.bottom + 4,
+        // right desde el borde derecho del viewport
+        right: window.innerWidth - rect.right,
+      };
+    }
+    kebabOpenFor = poolName;
   }
 
   // ─── Restore pool ───
@@ -459,40 +477,6 @@
                       on:click={(e) => toggleKebab(pool.name, e)}
                       title="Acciones"
                     >⋮</button>
-
-                    {#if kebabOpenFor === pool.name}
-                      <div class="kebab-menu" on:click|stopPropagation role="menu">
-                        <button class="kebab-item" disabled>
-                          <span class="k">01</span>
-                          <span>Snapshot</span>
-                          <span class="tc-mute">(Fase B)</span>
-                        </button>
-                        <button
-                          class="kebab-item"
-                          on:click={() => startScrub(pool.name)}
-                          disabled={scrubbing[pool.name]}
-                        >
-                          <span class="k">02</span>
-                          <span>{scrubbing[pool.name] ? 'Scrub iniciando...' : 'Scrub ahora'}</span>
-                        </button>
-                        <button class="kebab-item" disabled>
-                          <span class="k">03</span>
-                          <span>Añadir disco</span>
-                          <span class="tc-mute">(Fase B)</span>
-                        </button>
-                        <div class="kebab-sep"></div>
-                        <button class="kebab-item" disabled>
-                          <span class="k">04</span>
-                          <span>Exportar</span>
-                          <span class="tc-mute">(Fase B)</span>
-                        </button>
-                        <button class="kebab-item danger" disabled>
-                          <span class="k">DEL</span>
-                          <span>Destruir volumen</span>
-                          <span class="tc-mute">(Fase B)</span>
-                        </button>
-                      </div>
-                    {/if}
                   </div>
                 </div>
 
@@ -980,6 +964,47 @@
   </div>
   {/if}
 
+  <!-- Kebab menu flotante global (fuera del scroll para no ser cortado) -->
+  {#if kebabOpenFor}
+    {@const currentPool = pools.find(p => p.name === kebabOpenFor)}
+    <div
+      class="kebab-menu-float"
+      style="top: {kebabPosition.top}px; right: {kebabPosition.right}px"
+      on:click|stopPropagation
+      role="menu"
+    >
+      <button class="kebab-item" disabled>
+        <span class="k">01</span>
+        <span>Snapshot</span>
+        <span class="tc-mute">(Fase B)</span>
+      </button>
+      <button
+        class="kebab-item"
+        on:click={() => startScrub(kebabOpenFor)}
+        disabled={scrubbing[kebabOpenFor]}
+      >
+        <span class="k">02</span>
+        <span>{scrubbing[kebabOpenFor] ? 'Scrub iniciando...' : 'Scrub ahora'}</span>
+      </button>
+      <button class="kebab-item" disabled>
+        <span class="k">03</span>
+        <span>Añadir disco</span>
+        <span class="tc-mute">(Fase B)</span>
+      </button>
+      <div class="kebab-sep"></div>
+      <button class="kebab-item" disabled>
+        <span class="k">04</span>
+        <span>Exportar</span>
+        <span class="tc-mute">(Fase B)</span>
+      </button>
+      <button class="kebab-item danger" disabled>
+        <span class="k">DEL</span>
+        <span>Destruir volumen</span>
+        <span class="tc-mute">(Fase B)</span>
+      </button>
+    </div>
+  {/if}
+
   <!-- Footer -->
   <svelte:fragment slot="footer">
     <span><span class="k">pools</span> <span class="v">{pools.length}</span></span>
@@ -1161,21 +1186,24 @@
   }
   .pool-kebab:hover { color: var(--accent); }
 
-  .kebab-menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 4px);
+  .kebab-menu-float {
+    position: fixed;
     background: var(--bg);
     border: 1px solid var(--border-bright);
-    min-width: 200px;
+    min-width: 220px;
     padding: 4px;
-    z-index: 100;
+    z-index: 1000;
     box-shadow: 4px 4px 0 rgba(0,0,0,0.5), 0 0 12px rgba(0,255,159,0.08);
     font-family: var(--font-mono);
     clip-path: polygon(
       0 0, 100% 0, 100% calc(100% - 8px),
       calc(100% - 8px) 100%, 0 100%
     );
+    animation: kebab-in 0.12s ease-out;
+  }
+  @keyframes kebab-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
   .kebab-item {
     display: flex;
