@@ -1,4 +1,4 @@
-# NimOS Beta 6
+# NimOS Beta 8
 
 NimOS is a custom NAS operating system built from scratch with a Go daemon backend and SvelteKit frontend. Designed for personal use on bare-metal Linux machines.
 
@@ -9,7 +9,7 @@ NimOS is a custom NAS operating system built from scratch with a Go daemon backe
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andresgv-beep/NimOs-beta-7/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/andresgv-beep/NimOs-beta-8/main/install.sh | sudo bash
 ```
 
 ## Update
