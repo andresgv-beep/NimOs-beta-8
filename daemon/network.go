@@ -555,8 +555,7 @@ func handleCertsRoutes(w http.ResponseWriter, r *http.Request) {
 		_, certbotInstalled := runSafe("which", "certbot")
 		certs := []interface{}{}
 		if certList, ok := runSafe("sudo", "certbot", "certificates"); ok {
-			// Parse certbot output
-			_ = certList // simplified — return basic info
+			certs = parseCertbotCertificates(certList)
 		}
 		jsonOk(w, map[string]interface{}{"certbotInstalled": certbotInstalled, "certificates": certs})
 		return
@@ -1066,4 +1065,121 @@ func testRouterPort(body map[string]interface{}) map[string]interface{} {
 		"reachable":  reachable,
 		"method":     "portchecker",
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Certbot output parser
+// SEGURIDAD:
+//   - No ejecuta comandos (solo parsea texto ya obtenido)
+//   - No acepta input del usuario (parsea stdout de certbot)
+//   - No expone private key path ni serial number (anti-fingerprinting)
+//   - Todos los campos tienen límites estrictos de longitud
+//   - Paths restringidos a /etc/letsencrypt/ por prefijo
+// ═══════════════════════════════════════════════════════════════════
+
+// parseCertbotCertificates parsea la salida de `certbot certificates`
+// y devuelve una lista de certs con info estructurada.
+//
+// Formato esperado:
+//   Certificate Name: example.com
+//     Domains: example.com
+//     Expiry Date: 2026-06-13 00:55:32+00:00 (VALID: 54 days)
+//     Certificate Path: /etc/letsencrypt/live/example.com/fullchain.pem
+//     Private Key Path: /etc/letsencrypt/live/example.com/privkey.pem
+func parseCertbotCertificates(output string) []interface{} {
+	certs := []interface{}{}
+	if output == "" {
+		return certs
+	}
+
+	blocks := strings.Split(output, "Certificate Name:")
+	for i, block := range blocks {
+		if i == 0 {
+			continue
+		}
+
+		cert := map[string]interface{}{
+			"valid":      false,
+			"expiryDays": 0,
+		}
+
+		lines := strings.Split(block, "\n")
+
+		if len(lines) > 0 {
+			name := strings.TrimSpace(lines[0])
+			if len(name) > 0 && len(name) <= 253 {
+				cert["name"] = name
+				cert["domain"] = name
+			}
+		}
+
+		for _, line := range lines[1:] {
+			trimmed := strings.TrimSpace(line)
+
+			if strings.HasPrefix(trimmed, "Domains:") {
+				val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Domains:"))
+				if len(val) <= 1024 {
+					cert["domains"] = strings.Fields(val)
+				}
+			} else if strings.HasPrefix(trimmed, "Expiry Date:") {
+				val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Expiry Date:"))
+				if len(val) <= 256 {
+					cert["expiryRaw"] = val
+
+					if len(val) >= 10 {
+						cert["expiryDate"] = val[:10]
+					}
+
+					lower := strings.ToLower(val)
+					if strings.Contains(lower, "(valid:") {
+						cert["valid"] = true
+						if idx := strings.Index(lower, "valid:"); idx >= 0 {
+							rest := val[idx+6:]
+							daysStr := ""
+							for _, c := range rest {
+								if c >= '0' && c <= '9' {
+									daysStr += string(c)
+								} else if len(daysStr) > 0 {
+									break
+								}
+							}
+							if daysStr != "" {
+								var days int
+								fmt.Sscanf(daysStr, "%d", &days)
+								if days >= 0 && days < 10000 {
+									cert["expiryDays"] = days
+								}
+							}
+						}
+					} else if strings.Contains(lower, "(invalid") || strings.Contains(lower, "expired") {
+						cert["valid"] = false
+					}
+				}
+			} else if strings.HasPrefix(trimmed, "Certificate Path:") {
+				val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Certificate Path:"))
+				if strings.HasPrefix(val, "/etc/letsencrypt/") && len(val) <= 512 {
+					cert["certPath"] = val
+				}
+			} else if strings.HasPrefix(trimmed, "Private Key Path:") {
+				val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Private Key Path:"))
+				if strings.HasPrefix(val, "/etc/letsencrypt/") && len(val) <= 512 {
+					cert["hasPrivateKey"] = true
+					_ = val
+				}
+			} else if strings.HasPrefix(trimmed, "Key Type:") {
+				val := strings.TrimSpace(strings.TrimPrefix(trimmed, "Key Type:"))
+				if len(val) <= 32 {
+					cert["keyType"] = val
+				}
+			} else if strings.HasPrefix(trimmed, "Serial Number:") {
+				cert["hasSerial"] = true
+			}
+		}
+
+		if _, hasName := cert["name"]; hasName {
+			certs = append(certs, cert)
+		}
+	}
+
+	return certs
 }
