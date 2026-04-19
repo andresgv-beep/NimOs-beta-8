@@ -62,8 +62,6 @@
   let expandedPools = new Set();
   // Menu kebab abierto para un pool (solo uno a la vez)
   let kebabOpenFor = null;
-  // Coordenadas del menú kebab en coordenadas de document (para position:absolute en body)
-  let kebabPosition = { top: 0, left: 0 };
 
   // Restaurar pool
   let restoring = {};
@@ -156,26 +154,7 @@
 
   function toggleKebab(poolName, event) {
     if (event) event.stopPropagation();
-
-    if (kebabOpenFor === poolName) {
-      kebabOpenFor = null;
-      return;
-    }
-
-    // Coordenadas del botón en el document (no viewport)
-    // pageX/pageY son consistentes con position:absolute en body
-    if (event && event.currentTarget) {
-      const btn = event.currentTarget;
-      const rect = btn.getBoundingClientRect();
-
-      // El menú se alinea a la derecha del botón, justo debajo
-      // Con absolute + body, añadimos el scroll del documento
-      kebabPosition = {
-        top:  rect.bottom + window.scrollY + 4,
-        left: rect.right + window.scrollX - 220, // 220 = min-width del menú
-      };
-    }
-    kebabOpenFor = poolName;
+    kebabOpenFor = kebabOpenFor === poolName ? null : poolName;
   }
 
   // ─── Restore pool ───
@@ -294,17 +273,6 @@
   // ─── Click-outside listener para kebab ───
   function onDocClick() {
     kebabOpenFor = null;
-  }
-
-  // Action portal: mueve el elemento al document.body al montarse
-  // Esto lo saca de cualquier contenedor con zoom/transform/clip-path
-  function portal(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        if (node.parentNode) node.parentNode.removeChild(node);
-      }
-    };
   }
 
   // ─── Lifecycle ───
@@ -485,14 +453,48 @@
                   </div>
                   <div class="pool-chev" class:rot={expandedPools.has(pool.name)}>›</div>
 
-                  <div class="pool-kebab-wrap">
-                    <button
-                      class="pool-kebab"
-                      on:click={(e) => toggleKebab(pool.name, e)}
-                      title="Acciones"
-                    >⋮</button>
-                  </div>
+                  <button
+                    class="pool-kebab"
+                    class:active={kebabOpenFor === pool.name}
+                    on:click={(e) => toggleKebab(pool.name, e)}
+                    title="Acciones"
+                  >⋮</button>
                 </div>
+
+                <!-- Toolbar inline de acciones (sustituye al dropdown flotante) -->
+                {#if kebabOpenFor === pool.name}
+                  <div class="pool-actions-bar" on:click|stopPropagation>
+                    <button class="pa-btn" disabled title="Disponible en Fase B">
+                      <span class="pa-num">01</span>
+                      <span>Snapshot</span>
+                      <span class="pa-tag">Fase B</span>
+                    </button>
+                    <button
+                      class="pa-btn"
+                      on:click={() => startScrub(pool.name)}
+                      disabled={scrubbing[pool.name]}
+                    >
+                      <span class="pa-num">02</span>
+                      <span>{scrubbing[pool.name] ? 'Iniciando scrub...' : 'Scrub ahora'}</span>
+                    </button>
+                    <button class="pa-btn" disabled title="Disponible en Fase B">
+                      <span class="pa-num">03</span>
+                      <span>Añadir disco</span>
+                      <span class="pa-tag">Fase B</span>
+                    </button>
+                    <div class="pa-sep"></div>
+                    <button class="pa-btn" disabled title="Disponible en Fase B">
+                      <span class="pa-num">04</span>
+                      <span>Exportar</span>
+                      <span class="pa-tag">Fase B</span>
+                    </button>
+                    <button class="pa-btn danger" disabled title="Disponible en Fase B">
+                      <span class="pa-num">DEL</span>
+                      <span>Destruir</span>
+                      <span class="pa-tag">Fase B</span>
+                    </button>
+                  </div>
+                {/if}
 
                 <!-- Pool expanded body -->
                 {#if expandedPools.has(pool.name)}
@@ -978,47 +980,6 @@
   </div>
   {/if}
 
-  <!-- Kebab menu flotante global (fuera del scroll para no ser cortado) -->
-  {#if kebabOpenFor}
-    <div
-      class="kebab-menu-float"
-      use:portal
-      style="top: {kebabPosition.top}px; left: {kebabPosition.left}px"
-      on:click|stopPropagation
-      role="menu"
-    >
-      <button class="kebab-item" disabled>
-        <span class="k">01</span>
-        <span>Snapshot</span>
-        <span class="tc-mute">(Fase B)</span>
-      </button>
-      <button
-        class="kebab-item"
-        on:click={() => startScrub(kebabOpenFor)}
-        disabled={scrubbing[kebabOpenFor]}
-      >
-        <span class="k">02</span>
-        <span>{scrubbing[kebabOpenFor] ? 'Scrub iniciando...' : 'Scrub ahora'}</span>
-      </button>
-      <button class="kebab-item" disabled>
-        <span class="k">03</span>
-        <span>Añadir disco</span>
-        <span class="tc-mute">(Fase B)</span>
-      </button>
-      <div class="kebab-sep"></div>
-      <button class="kebab-item" disabled>
-        <span class="k">04</span>
-        <span>Exportar</span>
-        <span class="tc-mute">(Fase B)</span>
-      </button>
-      <button class="kebab-item danger" disabled>
-        <span class="k">DEL</span>
-        <span>Destruir volumen</span>
-        <span class="tc-mute">(Fase B)</span>
-      </button>
-    </div>
-  {/if}
-
   <!-- Footer -->
   <svelte:fragment slot="footer">
     <span><span class="k">pools</span> <span class="v">{pools.length}</span></span>
@@ -1186,7 +1147,6 @@
   }
   .pool-chev.rot { transform: rotate(90deg); color: var(--accent); }
 
-  .pool-kebab-wrap { position: relative; }
   .pool-kebab {
     width: 24px;
     height: 24px;
@@ -1200,61 +1160,79 @@
   }
   .pool-kebab:hover { color: var(--accent); }
 
-  .kebab-menu-float {
-    position: absolute;
-    background: var(--bg);
-    border: 1px solid var(--border-bright);
-    min-width: 220px;
-    padding: 4px;
-    z-index: 99999;
-    box-shadow: 4px 4px 0 rgba(0,0,0,0.5), 0 0 12px rgba(0,255,159,0.08);
-    font-family: var(--font-mono);
-    clip-path: polygon(
-      0 0, 100% 0, 100% calc(100% - 8px),
-      calc(100% - 8px) 100%, 0 100%
-    );
-    animation: kebab-in 0.12s ease-out;
+  /* Kebab button · ahora con estado active cuando se abre la toolbar */
+  .pool-kebab.active {
+    color: var(--accent);
+    background: var(--bg-2);
   }
-  @keyframes kebab-in {
-    from { opacity: 0; transform: translateY(-4px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  .kebab-item {
+
+  /* Toolbar inline de acciones · aparece bajo el pool-head cuando se pulsa kebab */
+  .pool-actions-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 4px;
+    padding: 10px 16px;
+    background: var(--bg-2);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    animation: pab-in 0.15s ease-out;
+  }
+  @keyframes pab-in {
+    from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
+    to   { opacity: 1; max-height: 60px; padding-top: 10px; padding-bottom: 10px; }
+  }
+
+  .pa-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     padding: 6px 10px;
-    width: 100%;
-    background: transparent;
-    border: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
     color: var(--fg-dim);
-    cursor: pointer;
     font-family: inherit;
     font-size: 10px;
-    text-align: left;
     letter-spacing: 0.3px;
+    cursor: pointer;
+    transition: all 0.1s;
+    clip-path: polygon(
+      0 0, calc(100% - 5px) 0, 100% 5px,
+      100% 100%, 5px 100%, 0 calc(100% - 5px)
+    );
   }
-  .kebab-item:not(:disabled):hover {
-    background: var(--bg-2);
+  .pa-btn:not(:disabled):hover {
+    border-color: var(--accent);
     color: var(--accent);
+    background: var(--bg-1);
   }
-  .kebab-item:disabled {
+  .pa-btn:disabled {
     cursor: not-allowed;
     opacity: 0.5;
   }
-  .kebab-item.danger:not(:disabled):hover {
-    background: rgba(255,90,90,0.08);
+  .pa-btn.danger:not(:disabled):hover {
+    border-color: var(--crit);
     color: var(--crit);
+    background: rgba(255,90,90,0.04);
   }
-  .kebab-item .k {
+  .pa-num {
     color: var(--fg-faint);
     font-size: 9px;
-    width: 30px;
+    min-width: 22px;
   }
-  .kebab-sep {
-    height: 1px;
-    background: var(--border);
-    margin: 4px 0;
+  .pa-tag {
+    color: var(--fg-faint);
+    font-size: 8px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-left: 2px;
+  }
+  .pa-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border-bright);
+    margin: 0 6px;
   }
 
   /* Pool body ───── */
