@@ -130,11 +130,8 @@
       class:active={showLauncher}
       title="Apps"
     >
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <rect x="1"  y="1"  width="5" height="5" fill="currentColor" />
-        <rect x="8"  y="1"  width="5" height="5" fill="currentColor" opacity="0.7" />
-        <rect x="1"  y="8"  width="5" height="5" fill="currentColor" opacity="0.7" />
-        <rect x="8"  y="8"  width="5" height="5" fill="currentColor" opacity="0.4" />
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path fill="currentColor" fill-rule="evenodd" d="M0 0h4v4H0V0zm0 6h4v4H0V6zm0 6h4v4H0v-4zM6 0h4v4H6V0zm0 6h4v4H6V6zm0 6h4v4H6v-4zm6-12h4v4h-4V0zm0 6h4v4h-4V6zm0 6h4v4h-4v-4z"/>
       </svg>
     </button>
 
@@ -308,22 +305,31 @@
   .tb-launcher-btn {
     width: 40px;
     height: 40px;
-    background: var(--accent);
-    color: var(--bg);
-    border: none;
+    background: var(--bg);
+    color: var(--accent);
+    border: 1px solid var(--accent);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.1s;
+    transition: all 0.12s;
+    /* Mismo patrón de bevel que ventanas y popovers: solo inferior-derecha */
     clip-path: polygon(
-      0 0, calc(100% - 6px) 0, 100% 6px,
-      100% 100%, 6px 100%, 0 calc(100% - 6px)
+      0 0,
+      100% 0,
+      100% calc(100% - 10px),
+      calc(100% - 10px) 100%,
+      0 100%
     );
-    box-shadow: 0 0 10px rgba(0, 255, 159, 0.3);
   }
-  .tb-launcher-btn:hover { background: var(--fg); }
-  .tb-launcher-btn.active { background: var(--fg); }
+  .tb-launcher-btn:hover {
+    background: var(--accent-dim);
+    box-shadow: 0 0 8px var(--accent-glow);
+  }
+  .tb-launcher-btn.active {
+    background: var(--accent-dim);
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
 
   /* ─── App icon ─── */
   .tb-app {
