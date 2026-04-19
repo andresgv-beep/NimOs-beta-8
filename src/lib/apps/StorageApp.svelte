@@ -165,11 +165,17 @@
     // Calcular coordenadas del botón para posicionar el menú en viewport
     if (event && event.currentTarget) {
       const rect = event.currentTarget.getBoundingClientRect();
-      // Menú alineado a la derecha del botón, 4px por debajo
+
+      // Compensar el CSS zoom aplicado al :root (ui-zoom)
+      // getBoundingClientRect devuelve coords POST-zoom, pero position:fixed
+      // se interpreta PRE-zoom. Dividimos por el zoom para compensar.
+      const zoom = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom') || '1'
+      ) || 1;
+
       kebabPosition = {
-        top: rect.bottom + 4,
-        // right desde el borde derecho del viewport
-        right: window.innerWidth - rect.right,
+        top:   (rect.bottom + 4) / zoom,
+        right: (window.innerWidth - rect.right) / zoom,
       };
     }
     kebabOpenFor = poolName;
@@ -966,7 +972,6 @@
 
   <!-- Kebab menu flotante global (fuera del scroll para no ser cortado) -->
   {#if kebabOpenFor}
-    {@const currentPool = pools.find(p => p.name === kebabOpenFor)}
     <div
       class="kebab-menu-float"
       style="top: {kebabPosition.top}px; right: {kebabPosition.right}px"
