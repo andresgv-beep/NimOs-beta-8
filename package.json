@@ -1,7 +1,7 @@
 {
-	"name": "nimos-beta-7-svelte",
+	"name": "nimos-beta-8",
 	"private": true,
-	"version": "0.8.1",
+	"version": "0.8.0-alpha",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",

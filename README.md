@@ -1,217 +1,247 @@
 # NimOS Beta 8
 
-NimOS is a custom NAS operating system built from scratch with a Go daemon backend and SvelteKit frontend. Designed for personal use on bare-metal Linux machines.
-
-![NimOS Desktop](docs/screenshots/screenshot-desktop.png)
+> **NAS Interactive Machine Operating System** · versión 0.8.0-alpha
+> Rewrite frontend con el nuevo lenguaje visual **Terminal v3**
 
 ---
 
-## Install
+## Qué es esto
+
+NimOS Beta 8 es un rewrite del **frontend** de NimOS usando un design system nuevo (`v3 Terminal Retro`) manteniendo el mismo daemon Go + mismos endpoints API que Beta 7.
+
+Beta 7 queda congelada como la versión de producción mientras Beta 8 se construye en paralelo. Cuando Beta 8 alcance paridad funcional, se promociona a versión estable.
+
+## Estado actual
+
+**✅ Listo**
+- Design system v3 completo (`src/app.css`)
+- Primitivas UI (`src/lib/ui/`): LED, BevelButton, KPICard, DenseTable, Sparkline, CmdOutputLog, SectionHead, Badge, KeyBind, StripeProgressBar, IconButton, TextInput, EmptyState, Spinner, Tab, Footer
+- Chrome del OS (`src/lib/components/`): AppShell, WindowFrame, Taskbar, Launcher, NotificationPanel, TransferPanel, Desktop, Login, SetupWizard
+- Rutas SvelteKit configuradas
+- Stubs de 11 apps que renderizan con AppShell pero muestran "WIP"
+
+**🚧 Pendiente (orden recomendado de migración)**
+
+1. [ ] **NimHealth** — Task Manager + detalle (mockup ya diseñado)
+2. [ ] **NimShield** — Panel live + historial (mockup ya diseñado)
+3. [ ] **NetworkApp** — Pequeña, buen candidato para coger ritmo
+4. [ ] **NimTorrent** — Backend C++ sin tocar, solo UI
+5. [ ] **AppStore** — Necesaria para instalar Docker apps
+6. [ ] **FileManager** — Mockup retro ya diseñado
+7. [ ] **StorageApp** — Mockup retro ya diseñado (+ vertical LED bars)
+8. [ ] **NimBackup** — Depende de otras apps
+9. [ ] **Settings** — La más grande, al final
+10. [ ] **Terminal** — Nueva en Beta 8
+11. [ ] **Notes** — Último, no crítica
+
+## Scope Beta 8 v1 · decisiones de corte
+
+**Incluido:**
+- 11 apps listadas arriba
+- Sistema de ventanas, taskbar, launcher, notificaciones, transferencias
+- Tema único `retro-v3` con accent color customizable (verde fósforo default)
+- Integración con daemon Go de Beta 7 (mismos endpoints)
+
+**Excluido (se revisa para Beta 9):**
+- Media Player (se asume Jellyfin vía Docker)
+- Virtual Machines (mover a AppStore como instalación opcional)
+- NimLink (reevaluar necesidad)
+- Widgets de escritorio
+- Modos de taskbar (dock, top, left)
+- Modo móvil (`MobileApp.svelte`)
+- Temas múltiples (midnight/dark/light)
+
+Si alguna de estas necesita volver, añadirla a `src/lib/apps.js`.
+
+---
+
+## Estructura del proyecto
+
+```
+nimos-beta-8/
+├── src/
+│   ├── app.css                    ← Design System v3 (tokens, scanlines, animaciones)
+│   ├── app.html                   ← Plantilla SvelteKit
+│   │
+│   ├── routes/
+│   │   ├── +layout.svelte         ← Layout global con app.css
+│   │   ├── +layout.js             ← prerender + ssr false
+│   │   └── +page.svelte           ← Raíz: loading/wizard/login/desktop
+│   │
+│   └── lib/
+│       ├── apps.js                ← Manifiesto de apps (APP_META, helpers)
+│       ├── index.js               ← Exportaciones de biblioteca
+│       │
+│       ├── stores/
+│       │   ├── auth.js            ← Sesión, JWT, setup, login (de Beta 7)
+│       │   ├── notifications.js   ← Toasts + panel (de Beta 7)
+│       │   ├── uploadTasks.js     ← Cola de transferencias (de Beta 7)
+│       │   ├── windows.js         ← Ventanas (de Beta 7, sin cambios)
+│       │   └── theme.js           ← Prefs (simplificado: solo retro)
+│       │
+│       ├── ui/                    ← Primitivas v3 (16 componentes)
+│       │   ├── LED.svelte
+│       │   ├── KeyBind.svelte
+│       │   ├── Badge.svelte
+│       │   ├── BevelButton.svelte
+│       │   ├── IconButton.svelte
+│       │   ├── TextInput.svelte
+│       │   ├── Sparkline.svelte
+│       │   ├── KPICard.svelte
+│       │   ├── SectionHead.svelte
+│       │   ├── DenseTable.svelte
+│       │   ├── StripeProgressBar.svelte
+│       │   ├── CmdOutputLog.svelte
+│       │   ├── EmptyState.svelte
+│       │   ├── Spinner.svelte
+│       │   ├── Tab.svelte
+│       │   ├── Footer.svelte
+│       │   └── index.js
+│       │
+│       ├── components/            ← Chrome del OS
+│       │   ├── AppShell.svelte    ← Envoltorio estándar de apps
+│       │   ├── WindowFrame.svelte ← Marco de ventana (drag/resize/maximize)
+│       │   ├── Taskbar.svelte     ← Barra inferior con launcher + systray
+│       │   ├── Launcher.svelte    ← Popover grid con categorías
+│       │   ├── NotificationPanel.svelte  ← Panel de la campana
+│       │   ├── TransferPanel.svelte      ← Panel de transferencias
+│       │   ├── Desktop.svelte     ← Contenedor raíz
+│       │   ├── Login.svelte       ← Pantalla de auth
+│       │   └── SetupWizard.svelte ← Primer arranque
+│       │
+│       └── apps/                  ← STUBS pendientes de migrar
+│           ├── FileManager.svelte
+│           ├── Settings.svelte
+│           ├── StorageApp.svelte
+│           ├── NetworkApp.svelte
+│           ├── NimTorrent.svelte
+│           ├── AppStore.svelte
+│           ├── NimBackup.svelte
+│           ├── NimHealth.svelte
+│           ├── NimShield.svelte
+│           ├── Terminal.svelte
+│           ├── Notes.svelte
+│           └── WebApp.svelte      ← Wrapper iframe para Docker apps
+│
+├── static/
+│   ├── icons/                     ← PNGs 3D de apps (copiados de Beta 7)
+│   └── wallpapers/
+│
+└── scripts/                       ← Instaladores (copiados de Beta 7)
+```
+
+---
+
+## Design System v3 · filosofía
+
+**Terminal retro moderno · sysadmin pro**
+
+- **Tipografía**: Inter (UI) + JetBrains Mono (datos, paths, números)
+- **Acento**: `#00ff9f` verde fósforo (personalizable vía `prefs.accentColor`)
+- **Paleta**: 4 niveles de bg + 4 de fg + 2 de borde (ver `app.css`)
+- **Bevel clip-path**: sistema D con tres tamaños (sm 6px, md 10px, lg 12px)
+- **Scanlines**: overlay global sutil permanente
+- **Sin border-radius** (bordes rectos)
+- **Shadow**: hard `4px 4px` (no blur)
+- **Feature settings**: `tnum` siempre activo en números tabulares
+
+### Tokens principales (`app.css`)
+
+```css
+--bg: #0a0a0a;      --fg: #e8e8e8;
+--bg-1: #141414;    --fg-dim: #888;
+--bg-2: #1c1c1c;    --fg-mute: #555;
+--bg-3: #242424;    --fg-faint: #333;
+
+--border: #2a2a2a;        --border-bright: #3a3a3a;
+
+--accent: #00ff9f;        --accent-dim: rgba(0,255,159,0.12);
+--warn: #ffb800;          --crit: #ff5a5a;
+--info: #4db8ff;          --magenta: #e873ff;  --orange: #ff8c3f;
+
+--bev-sm: 6px;            --bev-md: 10px;      --bev-lg: 12px;
+--taskbar-height: 52px;   --titlebar-height: 32px;
+```
+
+---
+
+## Cómo migrar una app de Beta 7
+
+Plantilla mental para cada app:
+
+1. **Abre el archivo original** en `../NimOs-beta-7-main/src/lib/apps/<App>.svelte`
+2. **Copia el bloque `<script>`** completo al stub de Beta 8. Este bloque tiene toda la lógica: fetch, stores, handlers, estado reactivo. No se toca.
+3. **Reescribe el template HTML** usando:
+   - `AppShell` para el chrome
+   - Primitivas `$lib/ui` en vez de CSS ad-hoc (BevelButton en vez de `.btn`, KPICard en vez de cards custom, DenseTable en vez de `.file-grid`, etc.)
+   - SectionHead para títulos de sección
+4. **Elimina el bloque `<style>`** del componente. El design system v3 provee todo vía primitivas + tokens globales.
+5. **Comprueba que los endpoints API siguen los mismos** que en Beta 7. El daemon Go no cambia.
+6. **Verifica mockups** si existen en la conversación de diseño (muchas apps tienen mockup retro ya validado).
+
+### Ejemplo mínimo
+
+```svelte
+<script>
+  // ⬇️ Copiar tal cual del original
+  import { onMount } from 'svelte';
+  import { hdrs } from '$lib/stores/auth.js';
+
+  let services = [];
+  onMount(async () => {
+    const r = await fetch('/api/services', { headers: hdrs() });
+    services = (await r.json()).services || [];
+  });
+</script>
+
+<!-- ⬇️ Reescribir con primitivas v3 -->
+<script>
+  import AppShell from '$lib/components/AppShell.svelte';
+  import { DenseTable, LED, SectionHead } from '$lib/ui';
+</script>
+
+<AppShell title="Services" headerIcon="⎈" pathSegments={['services']}>
+  <div style="padding:16px 20px">
+    <SectionHead count="· {services.length}">Services</SectionHead>
+    <DenseTable columns="40px 1fr 100px" headers={[{label:'#'},{label:'Name'},{label:'Status'}]}>
+      {#each services as s, i}
+        <div class="tr-row">
+          <div class="tr-ln">{String(i+1).padStart(2,'0')}</div>
+          <div>{s.name}</div>
+          <div><LED variant={s.status === 'running' ? 'ok' : 'off'} size={6} /> {s.status}</div>
+        </div>
+      {/each}
+    </DenseTable>
+  </div>
+</AppShell>
+```
+
+---
+
+## Dev
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andresgv-beep/NimOs-beta-8/main/install.sh | sudo bash
+npm install
+npm run dev         # arranca en localhost:5173 con proxy a daemon en :5000
+npm run build       # genera /dist para producción
 ```
 
-## Update
-
-From the UI: **Settings → Updates → Apply update**
-
-Or manually:
-
-```bash
-cd /opt/nimbusos
-bash scripts/update.sh
-```
+El daemon Go se arranca desde Beta 7 normalmente; Beta 8 solo sirve el frontend.
 
 ---
 
-## Screenshots
+## Qué se puede borrar si no lo necesitas
 
-### Desktop & Widgets
+Estos archivos/carpetas están en el repo pero son opcionales según tu flujo:
 
-![Desktop with widgets](docs/screenshots/screenshot-widgets.png)
-
-Live desktop widgets showing CPU, RAM, network traffic and storage usage at a glance.
-
-### App Launcher
-
-![App launcher](docs/screenshots/screenshot-launcher.png)
-
-### Storage Management
-
-![Storage — Disks](docs/screenshots/screenshot-storage.png)
-
-Visual disk layout with HDD/SSD and NVMe slots. Real-time health indicators.
-
-### Shared Folders
-
-![Shared folders with detail panel](docs/screenshots/screenshot-shares.png)
-
-Per-folder usage donut, quota info, mountpoint, pool type and file type breakdown.
-
-### Security — 2FA
-
-![2FA setup](docs/screenshots/screenshot-2fa.png)
-
-TOTP-based two-factor authentication via Google Authenticator, Authy or any compatible app.
+- `scripts/` — si usas otra forma de deploy distinta al `install.sh`
+- `static/wallpapers/*` — si prefieres gestionarlos por otro lado
+- Stubs de `src/lib/apps/*.svelte` que no vayas a usar en Beta 8 v1 (ej. si decides posponer Notes o Terminal, borra sus stubs)
 
 ---
 
-## Architecture
+## Créditos
 
-- **Backend**: Go daemon (~17 files, ~10 MB binary, ~2 MB RAM)
-- **Frontend**: SvelteKit (compiled static files served by the daemon)
-- **Reverse proxy**: Nginx (HTTPS with Let's Encrypt)
-- **Torrent**: C++ daemon using libtorrent-rasterbar
-- **No external dependencies**: No Docker required for core functionality
+Rewrite diseñado y construido por Andrés con Claude (Opus) como co-developer de arquitectura, refinando el lenguaje visual iterativamente a través de mockups HTML antes de llevar a código Svelte.
 
----
-
-## What works (production-ready)
-
-### Storage engine (rewritten from scratch in Beta 6)
-
-- **ZFS pools**: Create, destroy, mount on boot — mirror / raidz1 / raidz2 / stripe
-- **BTRFS pools**: Create, destroy, mount on boot (fstab) — single / raid1 / raid10
-- **Disk wipe**: TrueNAS-style wipe with verification — zeros start+end, sgdisk, wipefs, partition-level cleanup, 3-attempt retry
-- **Pre-flight safety**: Boot disk protection, kernel holder check, serial verification
-- **ZFS snapshots**: Create, list, delete, rollback (UI included)
-- **ZFS scrub**: Start, progress monitoring (UI included)
-- **ZFS datasets**: Create, list, delete with quotas
-- **BTRFS subvolumes**: Per-share subvolumes with qgroup quotas
-- **Quota management**: Set and change quotas live on both ZFS and BTRFS
-- **Journal**: Atomic writes (tmp+fsync+rename), phase tracking (started/completed), crash recovery
-- **Operations engine**: Step-based with rollback, error policies (FailFast/Continue/Ignore), exclusive mutex lock
-
-### Shared folders
-
-- Create shared folders as ZFS datasets or BTRFS subvolumes (not plain mkdir)
-- Per-folder quota with live adjustment
-- File stats by category (video / image / audio / document / other)
-- Usage monitoring with donut chart in UI
-- User permissions (read-only / read-write / no access)
-- SMB, NFS, FTP protocol tags
-
-### Networking
-
-- DDNS support (DuckDNS, No-IP, Dynu, FreeDNS)
-- HTTPS with Let's Encrypt (auto-renewal)
-- Reverse proxy for Docker apps
-- Port exposure management
-- Remote access portal
-
-### Security
-
-- 2FA/TOTP authentication
-- User management with roles (admin / user)
-- App permissions system (user × app access grid)
-- Session-based auth with Bearer tokens
-- Passed external pentest: **0 CRIT / 0 FAIL / 61 PASS** from internet
-
-### Apps & services
-
-- **File Manager**: Browse, upload, download files from shares
-- **NimTorrent**: Native C++ BitTorrent client — downloads only to pool shares (no system disk access)
-- **Media Player**: Built-in media playback
-- **Docker Apps**: Install via App Store, run in iframes with reverse proxy
-- **Notes**: Simple note-taking app
-
-### System
-
-- **OTA Updates**: Push to GitHub repo → one-click update from UI (auto-rebuild Go + frontend)
-- **Hardware monitoring**: CPU, RAM, disk, temperature, GPU (NVIDIA/AMD)
-- **System panel**: Service management, resource monitoring
-
----
-
-## What's in progress
-
-### Storage (functional but needs polish)
-
-- Orphan directory cleanup (works on destroy, not on startup)
-- BTRFS snapshot scheduler (ZFS manual snapshots work)
-- Expand pool (add disk to existing pool)
-- Import external ZFS pool
-- Hardware vs config reconciliation at boot (FOREIGN/MISSING/OK states)
-- SMART disk monitoring
-
-### NimTorrent
-
-- Auto-update download_dir when pools change
-- Speed optimization (was limited by wrong pool paths before — now fixed)
-
-### NimBackup
-
-- UI shell exists, backend not implemented
-- Planned: device pairing, remote folder sync, scheduled backups
-
----
-
-## Hardware tested on
-
-- **NAS**: Z370 AORUS Ultra Gaming, 15 GB RAM, Intel CPU
-  - sda: Toshiba 1.8 TB SATA (HDD)
-  - sdb: Seagate 3.6 TB SATA (HDD)
-  - sdc: 447 GB SSD (boot)
-- **Target platforms**: x86_64 bare-metal, Raspberry Pi (BTRFS only — ZFS needs more RAM)
-
----
-
-## Project structure
-
-```
-NimOs-beta-6/
-├── daemon/                       # Go backend
-│   ├── main.go                   # Entry point, startup sequence
-│   ├── storage_stubs.go          # Storage config, detection, routing, health
-│   ├── storage_wipe.go           # Disk wipe with journal + verification
-│   ├── storage_pools.go          # Pool create/destroy (ZFS + BTRFS)
-│   ├── storage_zfs_features.go   # Snapshots, scrub, datasets
-│   ├── shares.go                 # Shared folders with ZFS/BTRFS quota
-│   ├── auth.go                   # Authentication, 2FA, sessions
-│   ├── files.go                  # File manager operations
-│   ├── network.go                # DDNS, HTTPS, reverse proxy
-│   ├── docker.go                 # Docker app management
-│   ├── hardware.go               # System monitoring, updates
-│   ├── http.go                   # HTTP server, CORS, CSP
-│   ├── apps.go                   # App store, app installation
-│   ├── appproxy.go               # Reverse proxy for Docker apps
-│   ├── db.go                     # SQLite database
-│   ├── static.go                 # Static file serving
-│   └── vms.go                    # VM management (stub)
-├── src/lib/                      # SvelteKit frontend
-│   ├── apps/
-│   │   ├── Settings.svelte       # Main settings panel
-│   │   ├── StorageApp.svelte     # Storage app wrapper
-│   │   ├── StoragePanel.svelte   # Storage management UI
-│   │   ├── FileManager.svelte    # File browser
-│   │   ├── NimTorrent.svelte     # Torrent client UI
-│   │   └── ...
-│   └── components/
-│       ├── ShareWizard.svelte    # Share creation wizard with quota
-│       └── ...
-├── torrentd/                     # C++ torrent daemon
-├── scripts/
-│   ├── install.sh
-│   ├── update.sh
-│   ├── uninstall.sh
-│   └── nimos-daemon.service
-└── package.json
-```
-
----
-
-## Key design decisions
-
-1. **No Docker for core**: Storage, shares, auth, networking — all native Go. Docker only for user-installed apps.
-2. **ZFS + BTRFS**: Two filesystem options. ZFS for features (datasets, native quota, snapshots). BTRFS for lightweight setups (Raspberry Pi).
-3. **Verification over trust**: Every operation verifies its result. Wipe checks `lsblk`, mount checks `findmnt`, pool create checks `zpool list`. Exit codes are not trusted.
-4. **No system disk writes**: Every file operation validates the target is on a mounted pool, not the boot disk.
-5. **Crash recovery**: Journal with phase tracking. If the daemon crashes mid-operation, it knows exactly where it stopped.
-
----
-
-## Credits
-
-- Storage rewrite based on TrueNAS SCALE middleware patterns
-
+Base heredada: NimOS Beta 7 (Go daemon + SvelteKit + Design System v2).
