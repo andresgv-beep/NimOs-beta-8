@@ -541,7 +541,7 @@
                           (temp y horas pendiente backend)
                         </span>
                       </div>
-                      <div class="disk-table">
+                      <div class="disk-table cols-6-pool">
                         <div class="disk-thead">
                           <div></div>
                           <div>Modelo</div>
@@ -650,7 +650,7 @@
         <!-- Discos asignados a pools -->
         {#if totalDisksAssigned > 0}
           <SectionHead count={`· ${totalDisksAssigned}`}>Asignados a pools</SectionHead>
-          <div class="disk-table">
+          <div class="disk-table cols-5-disk">
             <div class="disk-thead">
               <div>Dispositivo</div>
               <div>Modelo</div>
@@ -683,7 +683,7 @@
           {#if !disks.eligible || disks.eligible.length === 0}
             <EmptyState icon="◌" title="Sin discos libres" hint="Todos los discos están asignados a pools" />
           {:else}
-            <div class="disk-table">
+            <div class="disk-table cols-5-disk">
               <div class="disk-thead">
                 <div>Dispositivo</div>
                 <div>Modelo</div>
@@ -714,7 +714,7 @@
         {#if disks.usb?.length > 0}
           <div style="margin-top:24px">
             <SectionHead count={`· ${disks.usb.length}`}>Dispositivos USB</SectionHead>
-            <div class="disk-table">
+            <div class="disk-table cols-5-disk">
               <div class="disk-thead">
                 <div>Dispositivo</div>
                 <div>Modelo</div>
@@ -763,7 +763,7 @@
                 {#if snapshots[pool.name].length === 0}
                   <EmptyState icon="◌" title="Sin snapshots" hint={`No hay snapshots en "${pool.name}"`} />
                 {:else}
-                  <div class="disk-table">
+                  <div class="disk-table cols-4-snap">
                     <div class="disk-thead">
                       <div>Nombre</div>
                       <div>Usado</div>
@@ -889,7 +889,7 @@
             Puede tardar horas y el sistema irá más lento mientras corre.
           </div>
 
-          <div class="disk-table">
+          <div class="disk-table cols-5-scrub">
             <div class="disk-thead">
               <div>Pool</div>
               <div>Tipo</div>
@@ -938,7 +938,7 @@
         {#if pools.length === 0 && (!disks.eligible || disks.eligible.length === 0)}
           <EmptyState icon="◌" title="Sin discos" hint="No hay discos detectados en el sistema" />
         {:else}
-          <div class="disk-table">
+          <div class="disk-table cols-6-smart">
             <div class="disk-thead">
               <div>Dispositivo</div>
               <div>Modelo</div>
@@ -1316,19 +1316,39 @@
     background: var(--bg-1);
     align-items: center;
   }
-  .pool-disks .disk-thead,
-  .pool-disks .disk-row {
-    grid-template-columns: 40px 1fr 100px 80px 80px 1fr;
+
+  /* Grids por variante de tabla — selectores directos y explícitos */
+
+  /* 6 col · Discos dentro de pool expandido (D1 icon, modelo, dev, cap, rol, SMART) */
+  .disk-table.cols-6-pool .disk-thead,
+  .disk-table.cols-6-pool .disk-row {
+    grid-template-columns: 40px 1fr 110px 80px 80px 140px;
   }
-  /* Para tablas fuera de pool-disks (vistas Discos, SMART, Scrub, Snapshots) */
-  .st-section > .disk-table .disk-thead,
-  .st-section > .disk-table .disk-row {
-    grid-template-columns: 140px 1fr 90px 140px 140px;
+
+  /* 5 col · Discos asignados / libres / USB (dev, modelo, cap, pool-o-tipo, estado) */
+  .disk-table.cols-5-disk .disk-thead,
+  .disk-table.cols-5-disk .disk-row {
+    grid-template-columns: 130px 1fr 100px 120px 130px;
   }
-  .st-section > .disk-table .disk-thead:has(> div:nth-child(6)),
-  .st-section > .disk-table .disk-row:has(> div:nth-child(6)) {
-    grid-template-columns: 140px 1fr 90px 100px 140px 1fr;
+
+  /* 5 col · Scrub (pool, tipo, tamaño, last scrub, acción) */
+  .disk-table.cols-5-scrub .disk-thead,
+  .disk-table.cols-5-scrub .disk-row {
+    grid-template-columns: 1fr 80px 100px 140px 160px;
   }
+
+  /* 4 col · Snapshots (nombre, usado, creado, acciones) */
+  .disk-table.cols-4-snap .disk-thead,
+  .disk-table.cols-4-snap .disk-row {
+    grid-template-columns: 1fr 90px 160px 90px;
+  }
+
+  /* 6 col · SMART (dev, modelo, cap, pool, SMART, notas) */
+  .disk-table.cols-6-smart .disk-thead,
+  .disk-table.cols-6-smart .disk-row {
+    grid-template-columns: 130px 1fr 90px 100px 130px 1fr;
+  }
+
   .disk-thead {
     font-size: 9px;
     color: var(--fg-mute);
