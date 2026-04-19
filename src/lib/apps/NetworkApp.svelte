@@ -89,9 +89,18 @@
   $: certDomain = ddnsData.config?.domain || certData.config?.ddns?.domain || '';
   $: externalIp = certData.ddns?.externalIp || ddnsData.externalIp || '';
   $: localIp = certData.localIp || routerStatus.internalIp || '';
-  $: sslValid = certData.ssl?.valid || false;
-  $: sslExpiryDays = certData.ssl?.expiryDays || 0;
-  $: sslExpiryDate = certData.ssl?.expiryDate || '';
+
+  // Detección de cert con dos fuentes:
+  //   1) /api/certs/status → lista certificados reales de certbot (fuente primaria)
+  //   2) /api/remote-access/status → estado SSL del daemon (fallback)
+  $: matchedCert = (certsFromCertbot || []).find(c =>
+    c.domain === certDomain ||
+    (c.domains && c.domains.includes(certDomain))
+  ) || null;
+  $: sslValid      = matchedCert?.valid || certData.ssl?.valid || false;
+  $: sslExpiryDays = matchedCert?.expiryDays || certData.ssl?.expiryDays || 0;
+  $: sslExpiryDate = matchedCert?.expiryDate || certData.ssl?.expiryDate || '';
+  $: sslKeyType    = matchedCert?.keyType || '';
 
   $: port5009Open = (routerPorts || []).some(p =>
     parseInt(p.externalPort || p.port) === HTTPS_PORT
@@ -118,14 +127,17 @@
   ];
 
   // ─── API ───
+  let certsFromCertbot = []; // Lista bruta de /api/certs/status (más fiable)
+
   async function loadAll() {
     try {
-      const [ddns, certs, routerS, routerP, proxy] = await Promise.all([
+      const [ddns, certs, routerS, routerP, proxy, certsList] = await Promise.all([
         fetch('/api/ddns/status',           { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
         fetch('/api/remote-access/status',  { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
         fetch('/api/router/status',         { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
         fetch('/api/router/ports',          { headers: hdrs() }).then(r => r.json()).catch(() => ({ ports: [] })),
         fetch('/api/proxy/status',          { headers: hdrs() }).then(r => r.json()).catch(() => ({ rules: [] })),
+        fetch('/api/certs/status',          { headers: hdrs() }).then(r => r.json()).catch(() => ({ certificates: [] })),
       ]);
       ddnsData     = ddns || {};
       certData     = certs || {};
@@ -133,6 +145,7 @@
       routerPorts  = routerP?.ports || [];
       proxyData    = proxy || { rules: [] };
       httpsEnabled = certs.https?.running || certs.https?.enabled || false;
+      certsFromCertbot = certsList?.certificates || [];
     } catch (e) {
       console.error('[NetworkApp] loadAll failed', e);
     }
@@ -340,6 +353,7 @@
   }
 
   // ─── Cert ───
+  // Emite un cert nuevo cuando no existe ninguno para este dominio
   async function requestCert() {
     const domain = certDomain;
     if (!domain) {
@@ -368,9 +382,38 @@
         certMsg = 'Certificado obtenido'; certMsgError = false;
         await loadAll();
       } else {
-        certMsg = data.error || 'Error al solicitar'; certMsgError = true;
+        certMsg = data.error || 'Error al solicitar. ¿Quizás el cert ya existe? Prueba renovar.';
+        certMsgError = true;
       }
     } catch { certMsg = 'Error de conexión'; certMsgError = true; }
+    certRequesting = false;
+  }
+
+  // Renueva un cert existente con --force-renewal
+  async function renewCert() {
+    const domain = certDomain || matchedCert?.domain;
+    if (!domain) {
+      certMsg = 'No hay dominio detectado'; certMsgError = true; return;
+    }
+    certRequesting = true; certMsg = '';
+    try {
+      const res = await fetch('/api/certs/renew', {
+        method: 'POST',
+        headers: { ...hdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        certMsg = 'Certificado renovado correctamente';
+        certMsgError = false;
+        await loadAll();
+      } else {
+        certMsg = data.error || 'Error al renovar';
+        certMsgError = true;
+      }
+    } catch {
+      certMsg = 'Error de conexión'; certMsgError = true;
+    }
     certRequesting = false;
   }
 
@@ -878,7 +921,7 @@
           </div>
 
           <div class="actions-row">
-            <BevelButton size="sm" onClick={requestCert} disabled={certRequesting}>
+            <BevelButton size="sm" onClick={renewCert} disabled={certRequesting}>
               {certRequesting ? 'Renovando...' : '↻ Renovar ahora'}
             </BevelButton>
           </div>
