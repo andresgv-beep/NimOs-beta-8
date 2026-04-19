@@ -343,7 +343,8 @@
     </div>
   {/if}
 
-  <!-- Summary bar (siempre visible arriba) -->
+  <!-- Summary bar · SOLO en vista Resumen -->
+  {#if active === 'overview'}
   <div class="st-kpis">
     <KPICard
       label="Volúmenes"
@@ -381,6 +382,7 @@
       bracketVariant={overallHealth === 'crit' ? 'crit' : overallHealth === 'warn' ? 'warn' : 'accent'}
     />
   </div>
+  {/if}
 
   <!-- ═══════ CONTENT PRINCIPAL ═══════ -->
   <div class="st-scroll">
