@@ -463,7 +463,14 @@
 
                 <!-- Toolbar inline de acciones (sustituye al dropdown flotante) -->
                 {#if kebabOpenFor === pool.name}
-                  <div class="pool-actions-bar" on:click|stopPropagation>
+                  <div
+                    class="pool-actions-bar"
+                    on:click|stopPropagation
+                    on:keydown
+                    role="toolbar"
+                    aria-label="Acciones del pool {pool.name}"
+                    tabindex="-1"
+                  >
                     <button class="pa-btn" disabled title="Disponible en Fase B">
                       <span class="pa-num">01</span>
                       <span>Snapshot</span>
@@ -1284,7 +1291,6 @@
   .pig-value.crit { color: var(--crit); }
 
   /* Disk table ───── */
-  .pool-disks { }
   .pd-head {
     font-size: 10px;
     color: var(--fg-mute);
