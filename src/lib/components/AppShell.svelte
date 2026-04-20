@@ -18,6 +18,11 @@
    *     bind:active
    *     pathSegments={['health', 'task-manager']}
    *   >
+   *     <svelte:fragment slot="page-header">
+   *       <b>Remote Access</b>
+   *       <span class="ph-desc">· exposición y acceso remoto</span>
+   *     </svelte:fragment>
+   *
    *     <svelte:fragment slot="toolbar">
    *       [toolbar custom]
    *     </svelte:fragment>
@@ -140,6 +145,11 @@
 
     <!-- Main -->
     <div class="main">
+      {#if $$slots['page-header']}
+        <div class="page-header">
+          <slot name="page-header" />
+        </div>
+      {/if}
       <slot name="toolbar" />
       <div class="content">
         <slot />
@@ -399,6 +409,41 @@
     flex: 1;
     overflow: auto;
     min-height: 0;
+  }
+
+  /* Page header opcional: título y descripción debajo del titlebar.
+     Solo se muestra si la app pasa contenido al slot "page-header". */
+  .page-header {
+    padding: 14px 22px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--fg);
+    letter-spacing: 0.3px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+  }
+  .page-header :global(b),
+  .page-header :global(strong) {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .page-header :global(.ph-desc),
+  .page-header :global(.ph-path) {
+    color: var(--fg-mute);
+    font-size: 11px;
+    font-weight: normal;
+    letter-spacing: 0.2px;
+  }
+  .page-header :global(.ph-right) {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .inner-footer {
