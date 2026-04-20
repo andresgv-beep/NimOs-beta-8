@@ -47,9 +47,13 @@
     KPICard, SectionHead, BevelButton, IconButton,
     LED, EmptyState, Spinner, Badge, StripeProgressBar
   } from '$lib/ui';
+  import ExportPoolWizard from './storage/ExportPoolWizard.svelte';
 
   // ─── State ───
   let active = 'overview'; // 'overview' | 'disks' | 'snapshots' | 'restore' | 'scrub' | 'smart'
+
+  // Export pool wizard state (UI lo llama "Desmontar", backend lo llama "export")
+  let exportPoolName = null;   // nombre del pool a desmontar (null = wizard cerrado)
 
   let pools = [];
   let disks = {};
@@ -166,6 +170,17 @@
   function toggleKebab(poolName, event) {
     if (event) event.stopPropagation();
     kebabOpenFor = kebabOpenFor === poolName ? null : poolName;
+  }
+
+  // ─── Export pool (UI: "Desmontar") ───
+  function openExportPoolWizard(poolName) {
+    kebabOpenFor = null;          // cerrar toolbar
+    exportPoolName = poolName;    // abre el wizard
+  }
+
+  async function handleExportPoolDone() {
+    exportPoolName = null;        // cerrar wizard
+    await loadAll();              // recargar lista de pools (el pool ya no debería estar)
   }
 
   // ─── Restore pool ───
@@ -478,7 +493,7 @@
                   >⋮</button>
                 </div>
 
-                <!-- Toolbar inline de acciones (sustituye al dropdown flotante) -->
+                <!-- Toolbar inline de acciones (3 acciones no-destructivas) -->
                 {#if kebabOpenFor === pool.name}
                   <div
                     class="pool-actions-bar"
@@ -499,23 +514,14 @@
                       disabled={scrubbing[pool.name]}
                     >
                       <span class="pa-num">02</span>
-                      <span>{scrubbing[pool.name] ? 'Iniciando scrub...' : 'Scrub ahora'}</span>
+                      <span>{scrubbing[pool.name] ? 'Iniciando...' : 'Verificar integridad'}</span>
                     </button>
-                    <button class="pa-btn" disabled title="Disponible en Fase B">
+                    <button
+                      class="pa-btn"
+                      on:click={() => openExportPoolWizard(pool.name)}
+                    >
                       <span class="pa-num">03</span>
-                      <span>Añadir disco</span>
-                      <span class="pa-tag">Fase B</span>
-                    </button>
-                    <div class="pa-sep"></div>
-                    <button class="pa-btn" disabled title="Disponible en Fase B">
-                      <span class="pa-num">04</span>
-                      <span>Exportar</span>
-                      <span class="pa-tag">Fase B</span>
-                    </button>
-                    <button class="pa-btn danger" disabled title="Disponible en Fase B">
-                      <span class="pa-num">DEL</span>
-                      <span>Destruir</span>
-                      <span class="pa-tag">Fase B</span>
+                      <span>Desmontar</span>
                     </button>
                   </div>
                 {/if}
@@ -1021,6 +1027,15 @@
 
 </AppShell>
 
+<!-- Export pool wizard · se abre desde kebab toolbar Resumen (UI: "Desmontar") -->
+{#if exportPoolName}
+  <ExportPoolWizard
+    poolName={exportPoolName}
+    on:done={handleExportPoolDone}
+    on:cancel={() => exportPoolName = null}
+  />
+{/if}
+
 <style>
   /* Loading ───── */
   .storage-loading {
@@ -1235,11 +1250,6 @@
     cursor: not-allowed;
     opacity: 0.5;
   }
-  .pa-btn.danger:not(:disabled):hover {
-    border-color: var(--crit);
-    color: var(--crit);
-    background: rgba(255,90,90,0.04);
-  }
   .pa-num {
     color: var(--fg-faint);
     font-size: 9px;
@@ -1251,12 +1261,6 @@
     letter-spacing: 0.8px;
     text-transform: uppercase;
     margin-left: 2px;
-  }
-  .pa-sep {
-    width: 1px;
-    height: 18px;
-    background: var(--border-bright);
-    margin: 0 6px;
   }
 
   /* Pool body ───── */
