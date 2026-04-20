@@ -23,6 +23,9 @@
  *   - Spinner          · spinner ASCII retro
  *   - Tab              · pestaña individual
  *   - Footer           · footer denso de ventana
+ *   - AppIcon          · icono de app con marco HUD (xs/sm/md/lg)
+ *   - ConfirmDialog    · modal de confirmación (simple o con input-to-confirm)
+ *   - WizardModal      · modal multipaso con stepper
  */
 
 export { default as LED }               from './LED.svelte';
@@ -41,3 +44,6 @@ export { default as EmptyState }        from './EmptyState.svelte';
 export { default as Spinner }           from './Spinner.svelte';
 export { default as Tab }               from './Tab.svelte';
 export { default as Footer }            from './Footer.svelte';
+export { default as AppIcon }           from './AppIcon.svelte';
+export { default as ConfirmDialog }     from './ConfirmDialog.svelte';
+export { default as WizardModal }       from './WizardModal.svelte';
