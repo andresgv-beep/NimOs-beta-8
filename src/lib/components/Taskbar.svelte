@@ -24,6 +24,7 @@
   import Launcher from './Launcher.svelte';
   import NotificationPanel from './NotificationPanel.svelte';
   import TransferPanel from './TransferPanel.svelte';
+  import AppIcon from '$lib/ui/AppIcon.svelte';
 
   let showLauncher = false;
   let showNotif = false;
@@ -156,11 +157,12 @@
             on:contextmenu={(e) => openCtxMenu(e, appId, existing)}
           >
             {#if isIconUrl(meta.icon)}
-              <img
+              <AppIcon
                 src={meta.icon}
                 alt={meta.name}
-                class="tb-icon-img"
-                on:error={(e) => e.target.style.opacity = '0'}
+                size="sm"
+                fallback={meta.fallback}
+                active={isOpen}
               />
             {:else}
               <span class="tb-emoji">{meta.fallback || meta.icon || '📦'}</span>
@@ -186,11 +188,12 @@
             on:contextmenu={(e) => openCtxMenu(e, win.appId, win)}
           >
             {#if isIconUrl(meta?.icon)}
-              <img
+              <AppIcon
                 src={meta.icon}
                 alt={meta?.name}
-                class="tb-icon-img"
-                on:error={(e) => e.target.style.opacity = '0'}
+                size="sm"
+                fallback={meta?.fallback}
+                active={!win.minimized}
               />
             {:else}
               <span class="tb-emoji">{meta?.fallback || '📦'}</span>
@@ -343,10 +346,11 @@
     align-items: center;
     justify-content: center;
     transition: transform 0.1s;
-    padding: 2px;
+    padding: 0;
   }
   .tb-app:hover { transform: translateY(-2px); }
 
+  /* Legacy (fallback si quedase algún uso) */
   .tb-icon-img {
     width: 32px;
     height: 32px;
