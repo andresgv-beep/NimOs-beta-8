@@ -83,6 +83,17 @@
 
   // ─── Derived ───
   $: hasPools = pools.length > 0;
+
+  // Metadata de cada vista para el page-header
+  const VIEW_META = {
+    overview:  { title: 'Resumen',    desc: 'volúmenes activos del sistema' },
+    disks:     { title: 'Discos',     desc: 'dispositivos físicos del sistema' },
+    snapshots: { title: 'Snapshots',  desc: 'puntos de restauración por pool' },
+    restore:   { title: 'Restaurar',  desc: 'importar pools existentes' },
+    scrub:     { title: 'Scrub',      desc: 'chequeo de integridad manual' },
+    smart:     { title: 'SMART',      desc: 'diagnóstico de discos' },
+  };
+  $: viewMeta = VIEW_META[active] || VIEW_META.overview;
   $: hasRestorable = restorablePools.length > 0;
   $: showRestoreBanner = !hasPools && hasRestorable;
   $: totalDisksAssigned = pools.reduce((s, p) => s + (p.disks?.length || 0), 0);
@@ -317,6 +328,12 @@
   ]}
   bind:active
 >
+
+  <!-- Page header: cambia según vista activa (Resumen, Discos, etc.) -->
+  <svelte:fragment slot="page-header">
+    <b>{viewMeta.title}</b>
+    <span class="ph-desc">· {viewMeta.desc}</span>
+  </svelte:fragment>
 
   {#if loading}
     <div class="storage-loading">

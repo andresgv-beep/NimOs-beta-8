@@ -461,6 +461,12 @@
   active="remote"
 >
 
+  <!-- Page header: título de sección + descripción (debajo del titlebar) -->
+  <svelte:fragment slot="page-header">
+    <b>Remote Access</b>
+    <span class="ph-desc">· exposición y acceso remoto</span>
+  </svelte:fragment>
+
   <!-- Sub-tabs horizontales -->
   <div class="na-subtabs">
     <Tab active={activeTab === 'ports'}  onClick={() => activeTab = 'ports'}>
