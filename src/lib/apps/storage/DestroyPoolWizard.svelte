@@ -2,17 +2,17 @@
   /**
    * DestroyPoolWizard · Wizard to permanently destroy a ZFS/BTRFS pool
    * ─────────────────────────────────────────────────────────────────
-   * Unlike ExportPoolWizard (which does a reversible export), this one
-   * permanently destroys the pool and releases its disks. Has 3 mandatory
-   * guards in sequence before allowing destruction:
+   * Destroys the pool and releases its disks. Two mandatory guards:
    *
    *   1. Check dependent services (GET /api/services/dependencies?pool=X)
    *      If any running → block, redirect to NimHealth to stop them
-   *   2. Check pool is exported (not mounted)
-   *      If mounted → block, offer to export it first (calls /api/storage/pool/export)
-   *   3. Final confirmation · user must type the pool name
+   *   2. Final confirmation · user must type the pool name
    *
    * Then POST /api/storage/pool/destroy { name } → pool gone, disks free
+   *
+   * Note: the backend destroy operates on the mounted pool config; it handles
+   * unmount internally as part of zpool destroy / btrfs wipefs. We don't need
+   * a separate unmount step.
    *
    * Usage:
    *   <DestroyPoolWizard poolName="data3" on:done on:cancel />
@@ -24,45 +24,33 @@
   import LED from '$lib/ui/LED.svelte';
 
   export let poolName = '';
-  /** Si el pool ya está exportado (llamado desde Restaurar en el futuro), saltamos paso 2 */
-  export let alreadyExported = false;
 
   const dispatch = createEventDispatcher();
 
   // Pasos:
   //   1 = detectando (carga inicial)
   //   2 = servicios activos (si los hay)
-  //   3 = desmontar pool (si está montado)
-  //   4 = confirmación final
+  //   3 = confirmación final
   let step = 1;
   let loading = true;
-  let deps = [];                   // servicios activos
-  let poolMounted = !alreadyExported; // al empezar asumimos montado (porque viene de Discos)
+  let deps = [];
   let pollInterval = null;
   let confirmInput = '';
   let processing = false;
   let errorMsg = '';
-  let exporting = false;           // estado del desmontaje inline
 
   // ─── Derived ───
   $: allStopped = deps.length === 0 || deps.every(d => d.status === 'stopped' || d.status === 'exited');
   $: canAdvance =
       step === 1 ? false
     : step === 2 ? allStopped
-    : step === 3 ? !poolMounted && !exporting
-    : step === 4 ? confirmInput.trim() === poolName && !processing
+    : step === 3 ? confirmInput.trim() === poolName && !processing
     : false;
 
-  // ─── Title dinámico del próximo botón ───
-  $: nextLabel =
-      step === 4 ? 'Destruir pool'
-    : 'Continuar →';
+  $: nextLabel = step === 3 ? 'Destruir pool' : 'Continuar →';
+  $: nextVariant = step === 3 ? 'danger' : 'primary';
 
-  $: nextVariant = step === 4 ? 'danger' : 'primary';
-
-  // ─── Total steps (dinámico según si hay servicios o pool montado) ───
-  // Simplificamos: siempre mostramos 4 pasos visuales, aunque algunos se salten.
-  const TOTAL_STEPS = 4;
+  const TOTAL_STEPS = 3;
 
   // ─── Fetch dependencies ───
   async function fetchDeps() {
@@ -81,56 +69,23 @@
     }
   }
 
-  // ─── Check if pool is mounted ───
-  async function checkPoolMounted() {
-    try {
-      const res = await fetch('/api/storage/pools', {
-        headers: { 'Authorization': `Bearer ${$token}` },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const pools = data.pools || data || [];
-      poolMounted = pools.some(p => p.name === poolName);
-      return true;
-    } catch (err) {
-      console.error('checkPoolMounted error:', err);
-      return false;
-    }
-  }
-
   // ─── Handlers ───
   function handleNext() {
     if (step === 2) {
-      // Pasar de servicios a desmontaje
       stopPolling();
-      if (poolMounted) {
-        step = 3;
-      } else {
-        step = 4;
-      }
+      step = 3;
       return;
     }
     if (step === 3) {
-      // Pool ya no está montado, pasar a confirmación final
-      step = 4;
-      return;
-    }
-    if (step === 4) {
       submitDestroy();
       return;
     }
   }
 
   function handleBack() {
-    if (step === 4) {
-      step = poolMounted ? 3 : (deps.length > 0 ? 2 : 1);
-      if (step === 2) startPolling();
-      return;
-    }
-    if (step === 3) {
-      step = deps.length > 0 ? 2 : 1;
-      if (step === 2) startPolling();
-      return;
+    if (step === 3 && deps.length > 0) {
+      step = 2;
+      startPolling();
     }
   }
 
@@ -155,45 +110,7 @@
     }
   }
 
-  // ─── Desmontar inline (paso 3) ───
-  async function handleExportInline() {
-    if (exporting) return;
-    exporting = true;
-    errorMsg = '';
-    try {
-      const res = await fetch('/api/storage/pool/export', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${$token}`,
-        },
-        body: JSON.stringify({ name: poolName }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        // Por si acaso · el backend comprueba servicios también
-        if (data.error === 'services_active') {
-          errorMsg = `Aparecieron servicios activos: ${(data.services || []).join(', ')}. Vuelve al paso 2.`;
-          await fetchDeps();
-          step = 2;
-          startPolling();
-        } else {
-          errorMsg = data.error || `Error ${res.status}`;
-        }
-        exporting = false;
-        return;
-      }
-      // Éxito del desmontaje
-      poolMounted = false;
-      exporting = false;
-    } catch (err) {
-      console.error('export inline error:', err);
-      errorMsg = err.message || 'Error al desmontar';
-      exporting = false;
-    }
-  }
-
-  // ─── Destroy real (paso 4) ───
+  // ─── Destroy real (paso 3) ───
   async function submitDestroy() {
     processing = true;
     errorMsg = '';
@@ -208,16 +125,12 @@
       });
       const data = await res.json();
       if (!res.ok || data.error) {
-        if (data.error === 'services_active') {
-          errorMsg = `Servicios se activaron: ${(data.services || []).join(', ')}. Reinicia el wizard.`;
-          // Retrocedemos a servicios
+        // Si aparecieron servicios mientras tanto, volver al paso 2
+        if (typeof data.error === 'string' && /Active services/i.test(data.error)) {
+          errorMsg = 'Aparecieron servicios activos. Deténlos y reintenta.';
           await fetchDeps();
           step = 2;
           startPolling();
-        } else if (data.error && /mount|active/i.test(data.error)) {
-          errorMsg = 'El pool sigue montado. Desmóntalo en el paso anterior.';
-          await checkPoolMounted();
-          step = 3;
         } else {
           errorMsg = data.error || `Error ${res.status}`;
         }
@@ -237,16 +150,11 @@
   onMount(async () => {
     await fetchDeps();
     loading = false;
-
-    // Flujo inicial: si hay servicios → paso 2; si no hay pero pool montado → paso 3;
-    // si ni servicios ni montado → paso 4
     if (deps.length > 0) {
       step = 2;
       startPolling();
-    } else if (poolMounted) {
-      step = 3;
     } else {
-      step = 4;
+      step = 3;
     }
   });
 
@@ -275,7 +183,7 @@
   currentStep={step === 1 ? 1 : step}
   totalSteps={TOTAL_STEPS}
   canAdvance={canAdvance}
-  canGoBack={(step === 3 && deps.length > 0) || (step === 4 && (poolMounted || deps.length > 0))}
+  canGoBack={step === 3 && deps.length > 0}
   nextLabel={nextLabel}
   nextVariant={nextVariant}
   on:next={handleNext}
@@ -283,12 +191,12 @@
   on:cancel={handleCancel}
 >
 
-  <!-- PASO 1 · Detección inicial -->
+  <!-- PASO 1 · Detección -->
   {#if step === 1}
     <div class="pretitle">DETECCIÓN</div>
-    <div class="h">Verificando estado del pool...</div>
+    <div class="h">Verificando servicios dependientes...</div>
     <div class="desc">
-      Antes de destruir el pool, NimOS comprueba servicios activos y si el pool está montado.
+      Antes de destruir el pool, NimOS comprueba qué servicios están usándolo activamente.
     </div>
     <div class="recheck">
       <span class="spin">⟳</span>
@@ -315,10 +223,10 @@
     </div>
     <div class="desc">
       {#if allStopped}
-        Ningún servicio está usando este pool. Pasamos a comprobar el estado del pool.
+        Ningún servicio está usando este pool. Puedes proceder a la destrucción.
       {:else}
         Hay servicios corriendo que dependen de este pool.
-        Ve a <b>NimHealth</b> (el gestor central de servicios) para detenerlos.
+        Ve a <b>NimHealth</b> para detenerlos.
       {/if}
     </div>
 
@@ -356,55 +264,8 @@
     {#if errorMsg}<div class="err">{errorMsg}</div>{/if}
   {/if}
 
-  <!-- PASO 3 · Desmontar pool -->
+  <!-- PASO 3 · Confirmación final -->
   {#if step === 3}
-    <div class="pretitle">DESMONTAJE REQUERIDO</div>
-    <div class="h">
-      {#if poolMounted}
-        El pool está montado · debe desmontarse primero
-      {:else}
-        Pool desmontado · listo para destruir
-      {/if}
-    </div>
-    <div class="desc">
-      {#if poolMounted}
-        Un pool montado no puede destruirse directamente. Desmóntalo desde aquí para preparar la destrucción.
-        Tras desmontar, los datos seguirían intactos en los discos hasta la destrucción final del paso 4.
-      {:else}
-        El pool <b>{poolName}</b> ya está desmontado. Puedes proceder a la destrucción definitiva.
-      {/if}
-    </div>
-
-    <div class="export-panel" class:done={!poolMounted}>
-      <div class="export-info">
-        <div class="export-label">Pool</div>
-        <div class="export-value">
-          <b>{poolName}</b>
-          {#if poolMounted}
-            <span class="badge-mounted">MONTADO</span>
-          {:else}
-            <span class="badge-exported">DESMONTADO</span>
-          {/if}
-        </div>
-      </div>
-      {#if poolMounted}
-        <button class="export-btn" on:click={handleExportInline} disabled={exporting}>
-          {#if exporting}
-            <span class="spin">⟳</span> Desmontando...
-          {:else}
-            Desmontar pool
-          {/if}
-        </button>
-      {:else}
-        <div class="export-ok">✓ LISTO</div>
-      {/if}
-    </div>
-
-    {#if errorMsg}<div class="err">{errorMsg}</div>{/if}
-  {/if}
-
-  <!-- PASO 4 · Confirmación final -->
-  {#if step === 4}
     <div class="pretitle">CONFIRMACIÓN · DESTRUCCIÓN FINAL</div>
     <div class="h">Última comprobación antes de destruir el pool</div>
 
@@ -477,7 +338,6 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Service list */
   .svc-list {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -532,88 +392,6 @@
     display: inline-block;
   }
 
-  /* Export panel paso 3 */
-  .export-panel {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    padding: 14px 18px;
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    gap: 16px;
-    font-family: var(--font-mono);
-  }
-  .export-panel.done {
-    border-color: var(--ok, #00d97e);
-    background: rgba(0, 217, 126, 0.03);
-  }
-  .export-label {
-    font-size: 9px;
-    color: var(--fg-mute);
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-  }
-  .export-value {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 4px;
-    font-size: 13px;
-    color: var(--fg);
-  }
-  .badge-mounted {
-    font-size: 9px;
-    padding: 2px 8px;
-    border: 1px solid var(--warn);
-    color: var(--warn);
-    letter-spacing: 1px;
-  }
-  .badge-exported {
-    font-size: 9px;
-    padding: 2px 8px;
-    border: 1px solid var(--ok, #00d97e);
-    color: var(--ok, #00d97e);
-    letter-spacing: 1px;
-  }
-  .export-btn {
-    padding: 8px 16px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    background: var(--bg-2);
-    border: 1px solid var(--warn);
-    color: var(--warn);
-    cursor: pointer;
-    transition: all 0.12s;
-    clip-path: polygon(
-      0 0, calc(100% - 5px) 0, 100% 5px,
-      100% 100%, 5px 100%, 0 calc(100% - 5px)
-    );
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .export-btn:hover:not(:disabled) {
-    background: rgba(255, 184, 0, 0.1);
-  }
-  .export-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .export-btn .spin {
-    display: inline-block;
-    animation: spin 1s linear infinite;
-  }
-  .export-ok {
-    font-size: 11px;
-    letter-spacing: 2px;
-    color: var(--ok, #00d97e);
-    font-family: var(--font-mono);
-    font-weight: 700;
-  }
-
-  /* Bullets */
   .bullets {
     list-style: none;
     padding: 0;
@@ -642,7 +420,6 @@
     font-weight: 600;
   }
 
-  /* Confirm input */
   .confirm-label {
     font-size: 10px;
     color: var(--fg-dim);
@@ -682,3 +459,4 @@
     letter-spacing: 0.3px;
   }
 </style>
+
