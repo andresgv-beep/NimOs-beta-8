@@ -48,12 +48,23 @@
     LED, EmptyState, Spinner, Badge, StripeProgressBar
   } from '$lib/ui';
   import ExportPoolWizard from './storage/ExportPoolWizard.svelte';
+  import { ConfirmDialog } from '$lib/ui';
 
   // ─── State ───
   let active = 'overview'; // 'overview' | 'disks' | 'snapshots' | 'restore' | 'scrub' | 'smart'
 
   // Export pool wizard state (UI lo llama "Desmontar", backend lo llama "export")
   let exportPoolName = null;   // nombre del pool a desmontar (null = wizard cerrado)
+
+  // Formatear disco (wipe)
+  let wipeDisk = null;         // path del disco a formatear (null = dialog cerrado)
+  let wipeProcessing = false;
+  let wipeError = '';
+
+  // Destruir pool
+  let destroyPool = null;      // nombre del pool a destruir
+  let destroyProcessing = false;
+  let destroyError = '';
 
   let pools = [];
   let disks = {};
@@ -181,6 +192,82 @@
   async function handleExportPoolDone() {
     exportPoolName = null;        // cerrar wizard
     await loadAll();              // recargar lista de pools (el pool ya no debería estar)
+  }
+
+  // ─── Formatear disco (wipe) ───
+  function openWipeDialog(diskPath) {
+    wipeDisk = diskPath;
+    wipeError = '';
+  }
+
+  async function confirmWipe() {
+    if (!wipeDisk || wipeProcessing) return;
+    wipeProcessing = true;
+    wipeError = '';
+    try {
+      const res = await fetch('/api/storage/wipe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${$token}`,
+        },
+        body: JSON.stringify({ disk: wipeDisk }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        wipeError = data.error || `Error ${res.status}`;
+        wipeProcessing = false;
+        return;
+      }
+      // Éxito
+      wipeProcessing = false;
+      wipeDisk = null;
+      await loadAll();
+    } catch (err) {
+      console.error('wipe error:', err);
+      wipeError = err.message || 'Error al formatear';
+      wipeProcessing = false;
+    }
+  }
+
+  // ─── Destruir pool ───
+  function openDestroyDialog(poolName) {
+    destroyPool = poolName;
+    destroyError = '';
+  }
+
+  async function confirmDestroy() {
+    if (!destroyPool || destroyProcessing) return;
+    destroyProcessing = true;
+    destroyError = '';
+    try {
+      const res = await fetch('/api/storage/pool/destroy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${$token}`,
+        },
+        body: JSON.stringify({ name: destroyPool }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        if (data.error === 'services_active') {
+          destroyError = `Servicios activos: ${(data.services || []).join(', ')}. Deténlos en NimHealth antes de destruir el pool.`;
+        } else {
+          destroyError = data.error || `Error ${res.status}`;
+        }
+        destroyProcessing = false;
+        return;
+      }
+      // Éxito
+      destroyProcessing = false;
+      destroyPool = null;
+      await loadAll();
+    } catch (err) {
+      console.error('destroy error:', err);
+      destroyError = err.message || 'Error al destruir pool';
+      destroyProcessing = false;
+    }
   }
 
   // ─── Restore pool ───
@@ -674,37 +761,65 @@
             <BevelButton size="sm" onClick={rescanDisks} disabled={scanning}>
               {scanning ? '▸ Escaneando...' : '↻ Rescan buses'}
             </BevelButton>
+            <BevelButton size="sm" disabled title="Disponible en Fase B5">
+              + Crear volumen <span class="sm tc-faint">· Fase B5</span>
+            </BevelButton>
           </div>
         </div>
 
         <!-- Discos asignados a pools -->
         {#if totalDisksAssigned > 0}
           <SectionHead count={`· ${totalDisksAssigned}`}>Asignados a pools</SectionHead>
-          <div class="disk-table cols-5-disk">
-            <div class="disk-thead">
-              <div>Dispositivo</div>
-              <div>Modelo</div>
-              <div>Capacidad</div>
-              <div>Pool</div>
-              <div>SMART</div>
-            </div>
-            {#each pools as pool}
-              {#each (pool.disks || []) as disk}
-                <div class="disk-row">
-                  <div class="disk-cell mono">/dev/{disk.name}</div>
-                  <div class="disk-cell mono">{disk.model || '—'}</div>
-                  <div class="disk-cell">{disk.size || '—'}</div>
-                  <div class="disk-cell">
-                    <Badge size="sm" variant="accent">{pool.name}</Badge>
-                  </div>
-                  <div class="disk-cell">
-                    <LED size={7} variant={smartVariant(disk.smartStatus)} />
-                    <span class="tc-dim sm">{disk.smartStatus || 'unknown'}</span>
-                  </div>
+          {#each pools as pool}
+            <div class="pool-group">
+              <div class="pool-group-head">
+                <div class="pool-group-title">
+                  <Badge size="sm" variant="accent">{pool.name}</Badge>
+                  <span class="sm tc-dim">· {(pool.disks || []).length} {(pool.disks || []).length === 1 ? 'disco' : 'discos'}</span>
                 </div>
-              {/each}
-            {/each}
-          </div>
+                <BevelButton
+                  size="sm"
+                  variant="danger"
+                  onClick={() => openDestroyDialog(pool.name)}
+                  title="Destruir pool {pool.name} y liberar sus discos"
+                >
+                  ✕ Destruir pool
+                </BevelButton>
+              </div>
+              <div class="disk-table cols-6-assigned">
+                <div class="disk-thead">
+                  <div>Dispositivo</div>
+                  <div>Modelo</div>
+                  <div>Capacidad</div>
+                  <div>Pool</div>
+                  <div>SMART</div>
+                  <div>Acción</div>
+                </div>
+                {#each (pool.disks || []) as disk}
+                  <div class="disk-row">
+                    <div class="disk-cell mono">/dev/{disk.name}</div>
+                    <div class="disk-cell mono">{disk.model || '—'}</div>
+                    <div class="disk-cell">{disk.size || '—'}</div>
+                    <div class="disk-cell">
+                      <Badge size="sm" variant="accent">{pool.name}</Badge>
+                    </div>
+                    <div class="disk-cell">
+                      <LED size={7} variant={smartVariant(disk.smartStatus)} />
+                      <span class="tc-dim sm">{disk.smartStatus || 'unknown'}</span>
+                    </div>
+                    <div class="disk-cell disk-actions">
+                      <button class="disk-action-btn" disabled title="Disponible en Fase B7">
+                        Desasignar <span class="action-tag">B7</span>
+                      </button>
+                      <button class="disk-action-btn" disabled title="Disponible en Fase B7">
+                        Reemplazar <span class="action-tag">B7</span>
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/each}
         {/if}
 
         <!-- Discos libres -->
@@ -713,13 +828,14 @@
           {#if !disks.eligible || disks.eligible.length === 0}
             <EmptyState icon="◌" title="Sin discos libres" hint="Todos los discos están asignados a pools" />
           {:else}
-            <div class="disk-table cols-5-disk">
+            <div class="disk-table cols-6-free">
               <div class="disk-thead">
                 <div>Dispositivo</div>
                 <div>Modelo</div>
                 <div>Capacidad</div>
                 <div>Tipo</div>
                 <div>Estado</div>
+                <div>Acción</div>
               </div>
               {#each disks.eligible as disk}
                 <div class="disk-row">
@@ -733,6 +849,15 @@
                   </div>
                   <div class="disk-cell">
                     <Badge size="sm" variant="accent">disponible</Badge>
+                  </div>
+                  <div class="disk-cell disk-actions">
+                    <button
+                      class="disk-action-btn warn"
+                      on:click={() => openWipeDialog(disk.path || '/dev/' + disk.name)}
+                      title="Formatear disco (borra todos los datos)"
+                    >
+                      ✕ Formatear
+                    </button>
                   </div>
                 </div>
               {/each}
@@ -1035,6 +1160,40 @@
     on:cancel={() => exportPoolName = null}
   />
 {/if}
+
+<!-- ConfirmDialog · Formatear disco (wipe) -->
+<ConfirmDialog
+  open={wipeDisk !== null}
+  title="Formatear disco"
+  message={`Esta acción borrará todos los datos de ${wipeDisk || ''}. No se puede deshacer.`}
+  confirmLabel="Formatear disco"
+  inputConfirm="FORMATEAR"
+  variant="danger"
+  processing={wipeProcessing}
+  on:confirm={confirmWipe}
+  on:cancel={() => { wipeDisk = null; wipeError = ''; }}
+>
+  {#if wipeError}
+    <div class="dialog-err">{wipeError}</div>
+  {/if}
+</ConfirmDialog>
+
+<!-- ConfirmDialog · Destruir pool -->
+<ConfirmDialog
+  open={destroyPool !== null}
+  title="Destruir pool"
+  message={`Esta acción destruirá el pool "${destroyPool || ''}" y liberará sus discos. Los datos del pool se perderán permanentemente.`}
+  confirmLabel="Destruir pool"
+  inputConfirm={destroyPool || ''}
+  variant="danger"
+  processing={destroyProcessing}
+  on:confirm={confirmDestroy}
+  on:cancel={() => { destroyPool = null; destroyError = ''; }}
+>
+  {#if destroyError}
+    <div class="dialog-err">{destroyError}</div>
+  {/if}
+</ConfirmDialog>
 
 <style>
   /* Loading ───── */
@@ -1358,6 +1517,18 @@
     grid-template-columns: 130px 1fr 100px 120px 130px;
   }
 
+  /* 6 col · Discos asignados con columna Acción (dev, modelo, cap, pool, smart, accion) */
+  .disk-table.cols-6-assigned .disk-thead,
+  .disk-table.cols-6-assigned .disk-row {
+    grid-template-columns: 130px 1fr 90px 100px 110px 200px;
+  }
+
+  /* 6 col · Discos libres con columna Acción (dev, modelo, cap, tipo, estado, accion) */
+  .disk-table.cols-6-free .disk-thead,
+  .disk-table.cols-6-free .disk-row {
+    grid-template-columns: 130px 1fr 100px 80px 110px 130px;
+  }
+
   /* 5 col · Scrub (pool, tipo, tamaño, last scrub, acción) */
   .disk-table.cols-5-scrub .disk-thead,
   .disk-table.cols-5-scrub .disk-row {
@@ -1403,6 +1574,90 @@
     white-space: nowrap;
   }
   .disk-cell.mono { font-family: var(--font-mono); }
+
+  /* ═══ B4 · Pool group + acciones por disco ═══ */
+  .pool-group {
+    margin-bottom: 18px;
+  }
+  .pool-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-bottom: none;
+  }
+  .pool-group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+  }
+  /* La tabla siguiente al head se pega visualmente */
+  .pool-group-head + .disk-table {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  .disk-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+  .disk-action-btn {
+    padding: 3px 8px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    background: var(--bg-2);
+    border: 1px solid var(--border-bright);
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: all 0.12s;
+    clip-path: polygon(
+      0 0, calc(100% - 4px) 0, 100% 4px,
+      100% 100%, 4px 100%, 0 calc(100% - 4px)
+    );
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .disk-action-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .disk-action-btn.warn {
+    border-color: var(--border-bright);
+    color: var(--warn);
+  }
+  .disk-action-btn.warn:hover:not(:disabled) {
+    border-color: var(--crit);
+    color: var(--crit);
+    background: rgba(255, 90, 90, 0.04);
+  }
+  .disk-action-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .action-tag {
+    font-size: 8px;
+    color: var(--fg-faint);
+    margin-left: 2px;
+  }
+
+  .dialog-err {
+    padding: 10px 12px;
+    background: rgba(255, 90, 90, 0.08);
+    border-left: 3px solid var(--crit);
+    font-size: 11px;
+    color: var(--crit);
+    font-family: var(--font-mono);
+    letter-spacing: 0.3px;
+    margin-top: 4px;
+  }
 
   /* Snapshots list ───── */
   .snap-list {
