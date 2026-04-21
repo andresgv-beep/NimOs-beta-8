@@ -48,6 +48,7 @@
     LED, EmptyState, Spinner, Badge, StripeProgressBar
   } from '$lib/ui';
   import ExportPoolWizard from './storage/ExportPoolWizard.svelte';
+  import DestroyPoolWizard from './storage/DestroyPoolWizard.svelte';
   import { ConfirmDialog } from '$lib/ui';
 
   // ─── State ───
@@ -56,15 +57,13 @@
   // Export pool wizard state (UI lo llama "Desmontar", backend lo llama "export")
   let exportPoolName = null;   // nombre del pool a desmontar (null = wizard cerrado)
 
+  // Destroy pool wizard state (destrucción definitiva con 4 pasos)
+  let destroyPoolName = null;  // nombre del pool a destruir (null = wizard cerrado)
+
   // Formatear disco (wipe)
   let wipeDisk = null;         // path del disco a formatear (null = dialog cerrado)
   let wipeProcessing = false;
   let wipeError = '';
-
-  // Destruir pool
-  let destroyPool = null;      // nombre del pool a destruir
-  let destroyProcessing = false;
-  let destroyError = '';
 
   let pools = [];
   let disks = {};
@@ -230,44 +229,14 @@
     }
   }
 
-  // ─── Destruir pool ───
-  function openDestroyDialog(poolName) {
-    destroyPool = poolName;
-    destroyError = '';
+  // ─── Destruir pool (wizard con 4 pasos · servicios → desmontaje → confirmación) ───
+  function openDestroyPoolWizard(poolName) {
+    destroyPoolName = poolName;
   }
 
-  async function confirmDestroy() {
-    if (!destroyPool || destroyProcessing) return;
-    destroyProcessing = true;
-    destroyError = '';
-    try {
-      const res = await fetch('/api/storage/pool/destroy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${$token}`,
-        },
-        body: JSON.stringify({ name: destroyPool }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        if (data.error === 'services_active') {
-          destroyError = `Servicios activos: ${(data.services || []).join(', ')}. Deténlos en NimHealth antes de destruir el pool.`;
-        } else {
-          destroyError = data.error || `Error ${res.status}`;
-        }
-        destroyProcessing = false;
-        return;
-      }
-      // Éxito
-      destroyProcessing = false;
-      destroyPool = null;
-      await loadAll();
-    } catch (err) {
-      console.error('destroy error:', err);
-      destroyError = err.message || 'Error al destruir pool';
-      destroyProcessing = false;
-    }
+  async function handleDestroyPoolDone() {
+    destroyPoolName = null;
+    await loadAll();
   }
 
   // ─── Restore pool ───
@@ -780,8 +749,8 @@
                 <BevelButton
                   size="sm"
                   variant="danger"
-                  onClick={() => openDestroyDialog(pool.name)}
-                  title="Destruir pool {pool.name} y liberar sus discos"
+                  onClick={() => openDestroyPoolWizard(pool.name)}
+                  title="Destruir pool {pool.name} · requiere desmontaje previo"
                 >
                   ✕ Destruir pool
                 </BevelButton>
@@ -852,11 +821,18 @@
                   </div>
                   <div class="disk-cell disk-actions">
                     <button
+                      class="disk-action-btn primary"
+                      disabled
+                      title="Crear un volumen nuevo con este disco · Disponible en Fase B5"
+                    >
+                      + Usar en volumen <span class="action-tag">B5</span>
+                    </button>
+                    <button
                       class="disk-action-btn warn"
                       on:click={() => openWipeDialog(disk.path || '/dev/' + disk.name)}
-                      title="Formatear disco (borra todos los datos)"
+                      title="Formatear disco (borra restos de formatos anteriores)"
                     >
-                      ✕ Formatear
+                      Formatear
                     </button>
                   </div>
                 </div>
@@ -1178,22 +1154,14 @@
   {/if}
 </ConfirmDialog>
 
-<!-- ConfirmDialog · Destruir pool -->
-<ConfirmDialog
-  open={destroyPool !== null}
-  title="Destruir pool"
-  message={`Esta acción destruirá el pool "${destroyPool || ''}" y liberará sus discos. Los datos del pool se perderán permanentemente.`}
-  confirmLabel="Destruir pool"
-  inputConfirm={destroyPool || ''}
-  variant="danger"
-  processing={destroyProcessing}
-  on:confirm={confirmDestroy}
-  on:cancel={() => { destroyPool = null; destroyError = ''; }}
->
-  {#if destroyError}
-    <div class="dialog-err">{destroyError}</div>
-  {/if}
-</ConfirmDialog>
+<!-- Destroy pool wizard · 4 pasos: detección → servicios → desmontaje → confirmación -->
+{#if destroyPoolName}
+  <DestroyPoolWizard
+    poolName={destroyPoolName}
+    on:done={handleDestroyPoolDone}
+    on:cancel={() => destroyPoolName = null}
+  />
+{/if}
 
 <style>
   /* Loading ───── */
@@ -1526,7 +1494,7 @@
   /* 6 col · Discos libres con columna Acción (dev, modelo, cap, tipo, estado, accion) */
   .disk-table.cols-6-free .disk-thead,
   .disk-table.cols-6-free .disk-row {
-    grid-template-columns: 130px 1fr 100px 80px 110px 130px;
+    grid-template-columns: 120px 1fr 90px 70px 100px 230px;
   }
 
   /* 5 col · Scrub (pool, tipo, tamaño, last scrub, acción) */
@@ -1628,6 +1596,14 @@
   .disk-action-btn:hover:not(:disabled) {
     border-color: var(--accent);
     color: var(--accent);
+  }
+  .disk-action-btn.primary {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim, rgba(255,145,68,0.05));
+  }
+  .disk-action-btn.primary:hover:not(:disabled) {
+    background: rgba(255, 145, 68, 0.12);
   }
   .disk-action-btn.warn {
     border-color: var(--border-bright);
