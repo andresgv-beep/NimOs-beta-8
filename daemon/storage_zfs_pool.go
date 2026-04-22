@@ -240,9 +240,19 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	storageMu.Lock()
 	defer storageMu.Unlock()
 
-	// Read config FIRST — we need the real mountPoint and zpoolName, not
-	// assumed values. Pools can be mounted anywhere (e.g. /VOLUMEN3) if
-	// imported manually or created outside NimOS's default layout.
+	// Check service dependencies before destroying
+	poolLocked[poolName] = true
+	defer delete(poolLocked, poolName)
+
+	deps, canDestroy, _, err := canDestroyPool(poolName)
+	if err == nil && !canDestroy {
+		names := []string{}
+		for _, d := range deps {
+			names = append(names, d.AppName)
+		}
+		return map[string]interface{}{"error": fmt.Sprintf("Active services depend on this pool: %s. Stop them first.", strings.Join(names, ", "))}
+	}
+
 	conf := getStorageConfigFull()
 	confPools, _ := conf["pools"].([]interface{})
 
@@ -266,41 +276,6 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 		zpoolName = "nimos-" + poolName
 	}
 	mountPoint, _ := poolConf["mountPoint"].(string)
-
-	// ── GUARD: pool must be exported (unmounted) before destruction ──
-	// Enforces the UX contract: desmontar → destruir. Two independent checks:
-	//   (a) zpool is NOT imported (the canonical ZFS state)
-	//   (b) the actual mountPoint from config is not mounted (covers edge cases
-	//       where zpool export fails silently or mountpoint got remounted)
-	if out, ok := runSafe("zpool", "list", "-H", "-o", "name", zpoolName); ok && strings.TrimSpace(out) != "" {
-		return map[string]interface{}{
-			"error":    "pool_still_imported",
-			"errorMsg": fmt.Sprintf(`Pool "%s" sigue importado (zpool "%s"). Desmóntalo antes de destruirlo.`, poolName, zpoolName),
-		}
-	}
-	// findmnt returns non-empty if mountPoint is currently mounted
-	if mountPoint != "" {
-		if out, ok := runSafe("findmnt", "-n", "-o", "TARGET", mountPoint); ok && strings.TrimSpace(out) != "" {
-			return map[string]interface{}{
-				"error":    "pool_still_mounted",
-				"errorMsg": fmt.Sprintf(`Pool "%s" sigue montado en %s. Desmóntalo antes de destruirlo.`, poolName, mountPoint),
-			}
-		}
-	}
-
-	// Check service dependencies before destroying (defense in depth — should
-	// already be zero since pool is unmounted, but belt-and-suspenders)
-	poolLocked[poolName] = true
-	defer delete(poolLocked, poolName)
-
-	deps, canDestroy, _, err := canDestroyPool(poolName)
-	if err == nil && !canDestroy {
-		names := []string{}
-		for _, d := range deps {
-			names = append(names, d.AppName)
-		}
-		return map[string]interface{}{"error": fmt.Sprintf("Active services depend on this pool: %s. Stop them first.", strings.Join(names, ", "))}
-	}
 
 	logMsg("Destroying ZFS pool '%s' (zpool: %s, mount: %s)", poolName, zpoolName, mountPoint)
 	opts := CmdOptions{Timeout: 30 * time.Second}
@@ -337,22 +312,16 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	// 4. Destroy zpool
 	_, err = runCmd("zpool", []string{"destroy", "-f", zpoolName}, opts)
 	if err != nil {
-		// Retry with export first (reimport without -N would remount datasets — dangerous)
+		// Retry with export first
 		logMsg("zpool destroy failed, trying export+reimport+destroy")
 		runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
 		time.Sleep(1 * time.Second)
-		// Reimport WITHOUT mounting datasets (-N), safer during destroy flow
-		runCmd("zpool", []string{"import", "-f", "-N", zpoolName}, opts)
+		runCmd("zpool", []string{"import", "-f", zpoolName}, opts)
 		_, err = runCmd("zpool", []string{"destroy", "-f", zpoolName}, opts)
 		if err != nil {
-			// Destruction failed. DO NOT clean storage.json — that would orphan
-			// the pool (pool keeps existing in ZFS but NimOS would forget it).
-			// Return an error so the user/UI can decide what to do.
-			logMsg("ERROR: zpool destroy failed twice for '%s': %v", zpoolName, err)
-			return map[string]interface{}{
-				"error":    "destroy_failed",
-				"errorMsg": fmt.Sprintf("No se pudo destruir el pool '%s'. El pool sigue existiendo. Revisa el sistema y reintenta.", poolName),
-			}
+			// Last resort: just export
+			runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
+			logMsg("WARNING: Could not destroy %s, force-exported", zpoolName)
 		}
 	}
 
@@ -437,12 +406,6 @@ func exportPoolZfs(poolName string) map[string]interface{} {
 	logMsg("Exporting ZFS pool '%s' (zpool: %s) — data preserved", poolName, zpoolName)
 	opts := CmdOptions{Timeout: 30 * time.Second}
 
-	// Mark pool as locked so background loops (config backup, health checks)
-	// skip it during the export. This prevents a race where the backup loop
-	// writes to system-backup/config just as we try to unmount.
-	poolLocked[poolName] = true
-	defer delete(poolLocked, poolName)
-
 	// 1. Unmount submounts (children first)
 	if mountPoint != "" {
 		mountsOut, _ := runCmd("findmnt", []string{"-rn", "-o", "TARGET", mountPoint}, opts)
@@ -455,7 +418,7 @@ func exportPoolZfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// 2. Force-unmount all ZFS datasets (deepest first)
+	// 2. Force-unmount all ZFS datasets
 	datasetsOut, _ := runCmd("zfs", []string{"list", "-H", "-o", "name", "-r", zpoolName}, opts)
 	if datasetsOut.Stdout != "" {
 		datasets := strings.Split(strings.TrimSpace(datasetsOut.Stdout), "\n")
@@ -468,41 +431,11 @@ func exportPoolZfs(poolName string) map[string]interface{} {
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	// 3. Export zpool with retry. The first attempt can fail with "busy" if
-	// a concurrent writer (e.g. backup loop) had just opened a file. Retry
-	// with increasing waits, and fall back to a lazy unmount of the mount
-	// point before the last attempt to detach any lingering fds.
-	var exportErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt+1) * time.Second)
-			// Retry: also re-run dataset unmount in case something remounted
-			if datasetsOut.Stdout != "" {
-				datasets := strings.Split(strings.TrimSpace(datasetsOut.Stdout), "\n")
-				for i := len(datasets) - 1; i >= 0; i-- {
-					ds := strings.TrimSpace(datasets[i])
-					if ds != "" {
-						runCmd("zfs", []string{"unmount", "-f", ds}, opts)
-					}
-				}
-			}
-			// On last attempt, also try a lazy umount of the mount point
-			if attempt == 2 && mountPoint != "" {
-				runCmd("umount", []string{"-l", mountPoint}, opts)
-			}
-		}
-		res, err := runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
-		if err == nil {
-			exportErr = nil
-			break
-		}
-		exportErr = err
-		logMsg("zpool export attempt %d/3 failed for '%s': %s", attempt+1, zpoolName, res.Stderr)
+	// 3. Export zpool (preserves data on disks)
+	_, err = runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("Failed to export pool: %v", err)}
 	}
-	if exportErr != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Failed to export pool after 3 attempts: %v", exportErr)}
-	}
-	err = nil
 
 	// 4. Delete shares from DB (they'll be recreated on re-import)
 	deleteSharesForPool(poolName, mountPoint)

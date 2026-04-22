@@ -18,11 +18,8 @@ func zfsAutoImportOnStartup() {
 	if !hasZfs {
 		return
 	}
-	// Import ONLY pools registered in storage.json. We deliberately do NOT use
-	// `zpool import -a` because it would adopt any zpool present on the system,
-	// including orphans from past installations or disks that the user meant
-	// to leave exported. Orphan pools should surface in the "Restaurar" UI so
-	// the user decides whether to adopt or destroy them.
+	// Import all known ZFS pools
+	runSafe("zpool", "import", "-a", "-N")
 
 	conf := getStorageConfigFull()
 	confPools, _ := conf["pools"].([]interface{})
@@ -37,19 +34,15 @@ func zfsAutoImportOnStartup() {
 		if zpoolName == "" || mountPoint == "" {
 			continue
 		}
-		// Check if pool is already imported
+		// Check if pool is imported
 		if _, ok := runSafe("zpool", "list", "-H", "-o", "name", zpoolName); !ok {
-			// Not imported — import it individually (no -a)
 			runSafe("zpool", "import", zpoolName)
 		}
-		// Ensure mount point matches config (only if differs — avoids side effects)
-		currentMp, _ := runSafe("zfs", "get", "-H", "-o", "value", "mountpoint", zpoolName)
-		if strings.TrimSpace(currentMp) != mountPoint {
-			runSafe("zfs", "set", "mountpoint="+mountPoint, zpoolName)
-		}
+		// Set mount point and mount
+		runSafe("zfs", "set", "mountpoint="+mountPoint, zpoolName)
 		runSafe("zfs", "mount", "-a")
 	}
-	logMsg("ZFS auto-import completed (only registered pools)")
+	logMsg("ZFS auto-import completed")
 }
 
 func btrfsAutoMountOnStartup() {
@@ -165,12 +158,6 @@ func detectStorageDisksGo() map[string]interface{} {
 		}
 	}
 
-	// Disks owned by ANY imported zpool (registered or orphan). Without this
-	// check, an orphan zpool's disks would incorrectly surface as "eligible"
-	// in the UI and the user could try to format them, resulting in confusing
-	// "device busy" errors downstream. See bug report #2.
-	zfsInUse := getZfsInUseDisks()
-
 	var eligible, nvme, usb, provisioned []interface{}
 
 	for _, raw := range data.BlockDevices {
@@ -252,17 +239,6 @@ func detectStorageDisksGo() map[string]interface{} {
 
 		if poolDisks["/dev/"+devName] {
 			diskInfo["classification"] = "provisioned"
-			provisioned = append(provisioned, diskInfo)
-			continue
-		}
-
-		// ZFS is holding this disk even though storage.json doesn't list it.
-		// Mark as provisioned so the UI shows it under "Asignados" rather than
-		// "Libres". A separate view (future: "Pools huérfanos") should surface
-		// these so the user can adopt or destroy them.
-		if zfsInUse[devName] {
-			diskInfo["classification"] = "provisioned"
-			diskInfo["orphanZfs"] = true
 			provisioned = append(provisioned, diskInfo)
 			continue
 		}
@@ -513,18 +489,7 @@ func backupConfigToPoolGo() {
 	for _, poolRaw := range confPools {
 		pm, _ := poolRaw.(map[string]interface{})
 		mountPoint, _ := pm["mountPoint"].(string)
-		poolName, _ := pm["name"].(string)
 		if mountPoint == "" {
-			continue
-		}
-
-		// Skip pools being exported/destroyed — writing to them would cause
-		// "device busy" errors during umount (see bug #53).
-		storageMu.Lock()
-		locked := poolLocked[poolName]
-		storageMu.Unlock()
-		if locked {
-			logMsg("config backup: skipping locked pool '%s'", poolName)
 			continue
 		}
 

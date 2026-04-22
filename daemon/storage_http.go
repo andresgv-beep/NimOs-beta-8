@@ -5,7 +5,6 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"strings"
 )
 
 func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +105,6 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 			if poolName == "" {
 				jsonError(w, 400, "Provide pool name")
 			} else {
-				// First try storage.json — happens with registered pools
 				conf := getStorageConfigFull()
 				confPools, _ := conf["pools"].([]interface{})
 				poolType := ""
@@ -115,21 +113,6 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 					if n, _ := pm["name"].(string); n == poolName {
 						poolType, _ = pm["type"].(string)
 						break
-					}
-				}
-				// Fallback: pool not in storage.json (exported/orphan case).
-				// Trust the type sent by the UI, which got it from /api/storage/restorable.
-				if poolType == "" {
-					poolType = bodyStr(body, "type")
-				}
-				// Last resort: detect from ZFS itself if possible
-				if poolType == "" {
-					zpoolName := bodyStr(body, "zpoolName")
-					if zpoolName == "" {
-						zpoolName = "nimos-" + poolName
-					}
-					if out, ok := runSafe("zpool", "list", "-H", "-o", "name", zpoolName); ok && strings.TrimSpace(out) != "" {
-						poolType = "zfs"
 					}
 				}
 				switch poolType {
