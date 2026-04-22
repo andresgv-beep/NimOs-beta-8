@@ -437,6 +437,12 @@ func exportPoolZfs(poolName string) map[string]interface{} {
 	logMsg("Exporting ZFS pool '%s' (zpool: %s) — data preserved", poolName, zpoolName)
 	opts := CmdOptions{Timeout: 30 * time.Second}
 
+	// Mark pool as locked so background loops (config backup, health checks)
+	// skip it during the export. This prevents a race where the backup loop
+	// writes to system-backup/config just as we try to unmount.
+	poolLocked[poolName] = true
+	defer delete(poolLocked, poolName)
+
 	// 1. Unmount submounts (children first)
 	if mountPoint != "" {
 		mountsOut, _ := runCmd("findmnt", []string{"-rn", "-o", "TARGET", mountPoint}, opts)
@@ -449,7 +455,7 @@ func exportPoolZfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// 2. Force-unmount all ZFS datasets
+	// 2. Force-unmount all ZFS datasets (deepest first)
 	datasetsOut, _ := runCmd("zfs", []string{"list", "-H", "-o", "name", "-r", zpoolName}, opts)
 	if datasetsOut.Stdout != "" {
 		datasets := strings.Split(strings.TrimSpace(datasetsOut.Stdout), "\n")
@@ -462,11 +468,41 @@ func exportPoolZfs(poolName string) map[string]interface{} {
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	// 3. Export zpool (preserves data on disks)
-	_, err = runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
-	if err != nil {
-		return map[string]interface{}{"error": fmt.Sprintf("Failed to export pool: %v", err)}
+	// 3. Export zpool with retry. The first attempt can fail with "busy" if
+	// a concurrent writer (e.g. backup loop) had just opened a file. Retry
+	// with increasing waits, and fall back to a lazy unmount of the mount
+	// point before the last attempt to detach any lingering fds.
+	var exportErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+			// Retry: also re-run dataset unmount in case something remounted
+			if datasetsOut.Stdout != "" {
+				datasets := strings.Split(strings.TrimSpace(datasetsOut.Stdout), "\n")
+				for i := len(datasets) - 1; i >= 0; i-- {
+					ds := strings.TrimSpace(datasets[i])
+					if ds != "" {
+						runCmd("zfs", []string{"unmount", "-f", ds}, opts)
+					}
+				}
+			}
+			// On last attempt, also try a lazy umount of the mount point
+			if attempt == 2 && mountPoint != "" {
+				runCmd("umount", []string{"-l", mountPoint}, opts)
+			}
+		}
+		res, err := runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
+		if err == nil {
+			exportErr = nil
+			break
+		}
+		exportErr = err
+		logMsg("zpool export attempt %d/3 failed for '%s': %s", attempt+1, zpoolName, res.Stderr)
 	}
+	if exportErr != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("Failed to export pool after 3 attempts: %v", exportErr)}
+	}
+	err = nil
 
 	// 4. Delete shares from DB (they'll be recreated on re-import)
 	deleteSharesForPool(poolName, mountPoint)

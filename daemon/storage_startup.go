@@ -513,7 +513,18 @@ func backupConfigToPoolGo() {
 	for _, poolRaw := range confPools {
 		pm, _ := poolRaw.(map[string]interface{})
 		mountPoint, _ := pm["mountPoint"].(string)
+		poolName, _ := pm["name"].(string)
 		if mountPoint == "" {
+			continue
+		}
+
+		// Skip pools being exported/destroyed — writing to them would cause
+		// "device busy" errors during umount (see bug #53).
+		storageMu.Lock()
+		locked := poolLocked[poolName]
+		storageMu.Unlock()
+		if locked {
+			logMsg("config backup: skipping locked pool '%s'", poolName)
 			continue
 		}
 
