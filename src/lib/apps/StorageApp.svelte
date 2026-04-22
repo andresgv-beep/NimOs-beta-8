@@ -49,6 +49,7 @@
   } from '$lib/ui';
   import ExportPoolWizard from './storage/ExportPoolWizard.svelte';
   import DestroyPoolWizard from './storage/DestroyPoolWizard.svelte';
+  import CreatePoolWizard from './storage/CreatePoolWizard.svelte';
   import { ConfirmDialog } from '$lib/ui';
 
   // ─── State ───
@@ -57,8 +58,12 @@
   // Export pool wizard state (UI lo llama "Desmontar", backend lo llama "export")
   let exportPoolName = null;   // nombre del pool a desmontar (null = wizard cerrado)
 
-  // Destroy pool wizard state (destrucción definitiva con 4 pasos)
-  let destroyPoolName = null;  // nombre del pool a destruir (null = wizard cerrado)
+  // Destroy pool wizard state (destrucción definitiva · 3 pasos)
+  // Guarda el objeto completo del pool (de restorablePools) en lugar del nombre
+  let destroyPool = null;  // objeto pool a destruir (null = wizard cerrado)
+
+  // Create pool wizard state
+  let creatingPool = false;  // true = wizard abierto
 
   // Formatear disco (wipe)
   let wipeDisk = null;         // path del disco a formatear (null = dialog cerrado)
@@ -229,14 +234,25 @@
     }
   }
 
-  // ─── Destruir pool (wizard con 4 pasos · servicios → desmontaje → confirmación) ───
-  function openDestroyPoolWizard(poolName) {
-    destroyPoolName = poolName;
+  // ─── Destruir pool (wizard 3 pasos · solo pools desmontados) ───
+  function openDestroyPoolWizard(poolObj) {
+    destroyPool = poolObj;
   }
 
   async function handleDestroyPoolDone() {
-    destroyPoolName = null;
+    destroyPool = null;
     await loadAll();
+  }
+
+  // ─── Crear pool (wizard 4 pasos · desde discos libres) ───
+  function openCreatePoolWizard() {
+    creatingPool = true;
+  }
+
+  async function handleCreatePoolDone() {
+    creatingPool = false;
+    await loadAll();
+    active = 'overview'; // salta a resumen para ver el pool recién creado
   }
 
   // ─── Restore pool ───
@@ -486,8 +502,16 @@
             <BevelButton size="sm" onClick={rescanDisks} disabled={scanning}>
               {scanning ? '▸ Escaneando...' : '↻ Escanear'}
             </BevelButton>
-            <BevelButton variant="primary" size="sm" disabled>
-              + Nuevo volumen <span class="tc-mute">(Fase B)</span>
+            <BevelButton
+              variant="primary"
+              size="sm"
+              onClick={openCreatePoolWizard}
+              disabled={!(disks.eligible?.length > 0)}
+              title={disks.eligible?.length > 0
+                ? 'Crear un nuevo pool de almacenamiento'
+                : 'No hay discos libres para crear un pool'}
+            >
+              + Nuevo volumen
             </BevelButton>
           </div>
         </div>
@@ -730,11 +754,66 @@
             <BevelButton size="sm" onClick={rescanDisks} disabled={scanning}>
               {scanning ? '▸ Escaneando...' : '↻ Rescan buses'}
             </BevelButton>
-            <BevelButton size="sm" disabled title="Disponible en Fase B5">
-              + Crear volumen <span class="sm tc-faint">· Fase B5</span>
+            <BevelButton
+              variant="primary"
+              size="sm"
+              onClick={openCreatePoolWizard}
+              disabled={!(disks.eligible?.length > 0)}
+              title={disks.eligible?.length > 0
+                ? 'Crear un nuevo pool con los discos libres'
+                : 'No hay discos libres para crear un pool'}
+            >
+              + Crear volumen
             </BevelButton>
           </div>
         </div>
+
+        <!-- Pools desmontados · pendientes de restaurar o destruir -->
+        {#if restorablePools.length > 0}
+          <SectionHead count={`· ${restorablePools.length}`}>Pools desmontados</SectionHead>
+          <div class="unmounted-hint">
+            Estos pools existen físicamente en los discos pero no están montados.
+            Puedes <b>restaurarlos</b> para volver a usarlos o <b>destruirlos</b> para liberar los discos.
+          </div>
+          <div class="unmounted-list">
+            {#each restorablePools as rp}
+              <div class="unmounted-card">
+                <div class="um-head">
+                  <div class="um-icon">◇</div>
+                  <div class="um-ident">
+                    <div class="um-name mono">{rp.name}</div>
+                    <div class="um-meta">
+                      {(rp.type || 'zfs').toUpperCase()} · {rp.vdevType || 'single'}
+                      · <span class="mono tc-faint">{rp.zpoolName}</span>
+                      · <span>{rp.size || '—'}</span>
+                    </div>
+                  </div>
+                  <div class="um-status">
+                    <LED size={7} variant={ledVariantForHealth(rp.health)} />
+                    <span class="sm">{rp.health || 'exported'}</span>
+                  </div>
+                </div>
+                <div class="um-actions">
+                  <BevelButton
+                    size="sm"
+                    onClick={() => { active = 'restore'; }}
+                    title="Ver detalles y restaurar este pool"
+                  >
+                    ▸ Restaurar
+                  </BevelButton>
+                  <BevelButton
+                    size="sm"
+                    variant="danger"
+                    onClick={() => openDestroyPoolWizard(rp)}
+                    title="Destruir {rp.name} · irreversible"
+                  >
+                    ✕ Destruir
+                  </BevelButton>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <!-- Discos asignados a pools -->
         {#if totalDisksAssigned > 0}
@@ -746,14 +825,7 @@
                   <Badge size="sm" variant="accent">{pool.name}</Badge>
                   <span class="sm tc-dim">· {(pool.disks || []).length} {(pool.disks || []).length === 1 ? 'disco' : 'discos'}</span>
                 </div>
-                <BevelButton
-                  size="sm"
-                  variant="danger"
-                  onClick={() => openDestroyPoolWizard(pool.name)}
-                  title="Destruir pool {pool.name} · requiere desmontaje previo"
-                >
-                  ✕ Destruir pool
-                </BevelButton>
+                <span class="sm tc-faint mono">montado · para destruir, desmóntalo primero</span>
               </div>
               <div class="disk-table cols-6-assigned">
                 <div class="disk-thead">
@@ -994,6 +1066,15 @@
                   >
                     {restoring[rp.zpoolName] ? '▸ Restaurando...' : '▸ Restaurar este pool'}
                   </BevelButton>
+                  <BevelButton
+                    variant="danger"
+                    size="sm"
+                    onClick={() => openDestroyPoolWizard(rp)}
+                    disabled={restoring[rp.zpoolName]}
+                    title="Destruir {rp.name} · irreversible · liberará los discos"
+                  >
+                    ✕ Destruir
+                  </BevelButton>
                 </div>
               </div>
             {/each}
@@ -1155,11 +1236,21 @@
 </ConfirmDialog>
 
 <!-- Destroy pool wizard · 4 pasos: detección → servicios → desmontaje → confirmación -->
-{#if destroyPoolName}
+{#if destroyPool}
   <DestroyPoolWizard
-    poolName={destroyPoolName}
+    pool={destroyPool}
     on:done={handleDestroyPoolDone}
-    on:cancel={() => destroyPoolName = null}
+    on:cancel={() => destroyPool = null}
+  />
+{/if}
+
+<!-- Create pool wizard · 4 pasos: tipo → discos → nombre → confirmación -->
+{#if creatingPool}
+  <CreatePoolWizard
+    capabilities={capabilities}
+    eligibleDisks={disks.eligible || []}
+    on:done={handleCreatePoolDone}
+    on:cancel={() => creatingPool = false}
   />
 {/if}
 
@@ -1754,6 +1845,76 @@
     display: flex;
     gap: 8px;
     padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Unmounted pools block (vista Discos) ───── */
+  .unmounted-hint {
+    font-size: 11px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+    padding: 10px 12px;
+    background: rgba(255, 184, 0, 0.04);
+    border-left: 3px solid var(--warn);
+    margin: 8px 0 12px;
+    font-family: var(--font-sans, inherit);
+  }
+  .unmounted-hint b { color: var(--warn); font-weight: 600; }
+  .unmounted-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .unmounted-card {
+    padding: 12px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--warn);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .um-head {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 12px;
+  }
+  .um-icon {
+    font-size: 20px;
+    color: var(--warn);
+    font-family: var(--font-mono);
+  }
+  .um-ident {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .um-name {
+    font-size: 13px;
+    color: var(--fg);
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .um-meta {
+    font-size: 10px;
+    color: var(--fg-mute);
+    letter-spacing: 0.3px;
+  }
+  .um-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+  }
+  .um-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 8px;
     border-top: 1px solid var(--border);
   }
 
