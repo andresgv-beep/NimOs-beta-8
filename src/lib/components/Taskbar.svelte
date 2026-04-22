@@ -131,7 +131,7 @@
       class:active={showLauncher}
       title="Apps"
     >
-      <svg class="nimos-logo" width="24" height="24" viewBox="-15 0 200 185" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg class="nimos-logo" width="32" height="32" viewBox="-15 0 200 185" fill="none" xmlns="http://www.w3.org/2000/svg">
         <rect x="5" y="45" width="80" height="80" rx="16" transform="rotate(-30 45 85)" fill="#e8e8e8"/>
         <rect x="108" y="12" width="60" height="60" rx="10" fill="#e8e8e8"/>
         <rect x="108" y="98" width="60" height="60" rx="10" fill="#e8e8e8"/>
@@ -295,7 +295,7 @@
 
   /* ─── Launcher button · logo NimOS sin marcos ─── */
   .tb-launcher-btn {
-    width: 40px;
+    width: 48px;
     height: 40px;
     background: transparent;
     border: none;
@@ -317,7 +317,7 @@
     transform: scale(0.94);
   }
   .nimos-logo {
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
   }
 
   /* ─── App icon ─── */
