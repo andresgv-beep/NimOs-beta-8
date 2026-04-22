@@ -295,6 +295,14 @@ func preFlightCheck(diskPath string) error {
 		return fmt.Errorf("disk %s has active holders: %s", diskPath, strings.Join(names, ", "))
 	}
 
+	// ZFS holders? /sys/block/.../holders does NOT detect ZFS.
+	// Check explicitly against `zpool status -P` to avoid operating on disks
+	// owned by an imported zpool (registered or orphan).
+	zfsInUse := getZfsInUseDisks()
+	if zfsInUse[diskName] {
+		return fmt.Errorf("disk %s is in use by an imported zpool — export the pool first", diskPath)
+	}
+
 	// Disk exists?
 	if _, err := os.Stat(diskPath); err != nil {
 		return fmt.Errorf("disk %s not found", diskPath)

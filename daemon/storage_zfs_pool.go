@@ -240,19 +240,9 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	storageMu.Lock()
 	defer storageMu.Unlock()
 
-	// Check service dependencies before destroying
-	poolLocked[poolName] = true
-	defer delete(poolLocked, poolName)
-
-	deps, canDestroy, _, err := canDestroyPool(poolName)
-	if err == nil && !canDestroy {
-		names := []string{}
-		for _, d := range deps {
-			names = append(names, d.AppName)
-		}
-		return map[string]interface{}{"error": fmt.Sprintf("Active services depend on this pool: %s. Stop them first.", strings.Join(names, ", "))}
-	}
-
+	// Read config FIRST — we need the real mountPoint and zpoolName, not
+	// assumed values. Pools can be mounted anywhere (e.g. /VOLUMEN3) if
+	// imported manually or created outside NimOS's default layout.
 	conf := getStorageConfigFull()
 	confPools, _ := conf["pools"].([]interface{})
 
@@ -276,6 +266,41 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 		zpoolName = "nimos-" + poolName
 	}
 	mountPoint, _ := poolConf["mountPoint"].(string)
+
+	// ── GUARD: pool must be exported (unmounted) before destruction ──
+	// Enforces the UX contract: desmontar → destruir. Two independent checks:
+	//   (a) zpool is NOT imported (the canonical ZFS state)
+	//   (b) the actual mountPoint from config is not mounted (covers edge cases
+	//       where zpool export fails silently or mountpoint got remounted)
+	if out, ok := runSafe("zpool", "list", "-H", "-o", "name", zpoolName); ok && strings.TrimSpace(out) != "" {
+		return map[string]interface{}{
+			"error":    "pool_still_imported",
+			"errorMsg": fmt.Sprintf(`Pool "%s" sigue importado (zpool "%s"). Desmóntalo antes de destruirlo.`, poolName, zpoolName),
+		}
+	}
+	// findmnt returns non-empty if mountPoint is currently mounted
+	if mountPoint != "" {
+		if out, ok := runSafe("findmnt", "-n", "-o", "TARGET", mountPoint); ok && strings.TrimSpace(out) != "" {
+			return map[string]interface{}{
+				"error":    "pool_still_mounted",
+				"errorMsg": fmt.Sprintf(`Pool "%s" sigue montado en %s. Desmóntalo antes de destruirlo.`, poolName, mountPoint),
+			}
+		}
+	}
+
+	// Check service dependencies before destroying (defense in depth — should
+	// already be zero since pool is unmounted, but belt-and-suspenders)
+	poolLocked[poolName] = true
+	defer delete(poolLocked, poolName)
+
+	deps, canDestroy, _, err := canDestroyPool(poolName)
+	if err == nil && !canDestroy {
+		names := []string{}
+		for _, d := range deps {
+			names = append(names, d.AppName)
+		}
+		return map[string]interface{}{"error": fmt.Sprintf("Active services depend on this pool: %s. Stop them first.", strings.Join(names, ", "))}
+	}
 
 	logMsg("Destroying ZFS pool '%s' (zpool: %s, mount: %s)", poolName, zpoolName, mountPoint)
 	opts := CmdOptions{Timeout: 30 * time.Second}
@@ -312,16 +337,22 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	// 4. Destroy zpool
 	_, err = runCmd("zpool", []string{"destroy", "-f", zpoolName}, opts)
 	if err != nil {
-		// Retry with export first
+		// Retry with export first (reimport without -N would remount datasets — dangerous)
 		logMsg("zpool destroy failed, trying export+reimport+destroy")
 		runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
 		time.Sleep(1 * time.Second)
-		runCmd("zpool", []string{"import", "-f", zpoolName}, opts)
+		// Reimport WITHOUT mounting datasets (-N), safer during destroy flow
+		runCmd("zpool", []string{"import", "-f", "-N", zpoolName}, opts)
 		_, err = runCmd("zpool", []string{"destroy", "-f", zpoolName}, opts)
 		if err != nil {
-			// Last resort: just export
-			runCmd("zpool", []string{"export", "-f", zpoolName}, opts)
-			logMsg("WARNING: Could not destroy %s, force-exported", zpoolName)
+			// Destruction failed. DO NOT clean storage.json — that would orphan
+			// the pool (pool keeps existing in ZFS but NimOS would forget it).
+			// Return an error so the user/UI can decide what to do.
+			logMsg("ERROR: zpool destroy failed twice for '%s': %v", zpoolName, err)
+			return map[string]interface{}{
+				"error":    "destroy_failed",
+				"errorMsg": fmt.Sprintf("No se pudo destruir el pool '%s'. El pool sigue existiendo. Revisa el sistema y reintenta.", poolName),
+			}
 		}
 	}
 

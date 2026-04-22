@@ -43,7 +43,7 @@ func saveStorageConfigFull(config map[string]interface{}) {
 	storageConfigMu.Lock()
 	defer storageConfigMu.Unlock()
 	data, _ := json.MarshalIndent(config, "", "  ")
-	os.WriteFile(storageConfigFile, data, 0644)
+	os.WriteFile(storageConfigFile, data, 0600)
 }
 
 // ─── Pool queries (needed by various files) ──────────────────────────────────
