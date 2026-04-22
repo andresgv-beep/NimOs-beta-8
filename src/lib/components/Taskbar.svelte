@@ -124,27 +124,17 @@
   <!-- ═══ IZQUIERDA ═══ -->
   <div class="tb-left">
 
-    <!-- Launcher button · logo NimOS 3 cubos -->
+    <!-- Launcher button · logo NimOS -->
     <button
       class="tb-launcher-btn"
       on:click={() => showLauncher = !showLauncher}
       class:active={showLauncher}
       title="Apps"
     >
-      <svg class="nimos-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <!-- 3 cubos isométricos · logo NimOS -->
-        <!-- Cubo superior -->
-        <path d="M12 2 L18 5 L12 8 L6 5 Z" fill="#ffffff" opacity="0.95"/>
-        <path d="M6 5 L12 8 L12 14 L6 11 Z" fill="#ffffff" opacity="0.65"/>
-        <path d="M18 5 L12 8 L12 14 L18 11 Z" fill="#ffffff" opacity="0.8"/>
-        <!-- Cubo inferior izquierdo -->
-        <path d="M6 13 L12 16 L6 19 L0 16 Z" fill="#ffffff" opacity="0.95"/>
-        <path d="M0 16 L6 19 L6 22 L0 19 Z" fill="#ffffff" opacity="0.5"/>
-        <path d="M12 16 L6 19 L6 22 L12 19 Z" fill="#ffffff" opacity="0.7"/>
-        <!-- Cubo inferior derecho -->
-        <path d="M18 13 L24 16 L18 19 L12 16 Z" fill="#ffffff" opacity="0.95"/>
-        <path d="M12 16 L18 19 L18 22 L12 19 Z" fill="#ffffff" opacity="0.5"/>
-        <path d="M24 16 L18 19 L18 22 L24 19 Z" fill="#ffffff" opacity="0.7"/>
+      <svg class="nimos-logo" width="24" height="24" viewBox="-15 0 200 185" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="5" y="45" width="80" height="80" rx="16" transform="rotate(-30 45 85)" fill="#e8e8e8"/>
+        <rect x="108" y="12" width="60" height="60" rx="10" fill="#e8e8e8"/>
+        <rect x="108" y="98" width="60" height="60" rx="10" fill="#e8e8e8"/>
       </svg>
     </button>
 
@@ -264,18 +254,16 @@
 
 <style>
   /* ═══════════════════════════════════════════════════════════
-     TASKBAR · glass flotante con mismo patrón que ventanas
+     TASKBAR · pegado abajo (Windows 11 style) con glass
      ═══════════════════════════════════════════════════════════ */
   .taskbar {
     position: fixed;
-    left: 12px; right: 12px; bottom: 12px;
+    left: 0; right: 0; bottom: 0;
     height: var(--taskbar-height);
     background: var(--window-bg);
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
-    border: 1px solid var(--window-border);
-    border-radius: var(--window-radius);
-    box-shadow: var(--window-shadow);
+    border-top: 1px solid var(--window-border);
     display: flex;
     align-items: stretch;
     padding: 0 12px;
