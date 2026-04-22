@@ -86,4 +86,28 @@
     background-position: center;
     overflow: hidden;
   }
+
+  /* Capas ambiente Eagle Ridge · montañas al fondo.
+     Solo visibles si el usuario no tiene wallpaper custom.
+     Se dibujan con clip-path, sin imágenes externas. */
+  .desktop::before {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 60vh;
+    background: linear-gradient(180deg, transparent 40%, rgba(80, 70, 80, 0.35) 40.1%, rgba(50, 45, 55, 0.6) 100%);
+    clip-path: polygon(0% 100%, 0% 65%, 8% 52%, 15% 58%, 22% 45%, 30% 50%, 38% 38%, 45% 44%, 52% 30%, 60% 36%, 68% 25%, 75% 32%, 82% 22%, 88% 28%, 95% 20%, 100% 26%, 100% 100%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .desktop::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 45vh;
+    background: linear-gradient(180deg, transparent 0%, rgba(30, 25, 30, 0.7) 30%, rgba(20, 15, 20, 0.9) 100%);
+    clip-path: polygon(0% 100%, 0% 50%, 5% 45%, 10% 55%, 18% 40%, 25% 48%, 32% 30%, 40% 38%, 48% 20%, 55% 28%, 62% 18%, 70% 26%, 78% 14%, 85% 22%, 92% 18%, 100% 24%, 100% 100%);
+    pointer-events: none;
+    z-index: 0;
+  }
 </style>

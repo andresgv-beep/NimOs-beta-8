@@ -196,33 +196,28 @@
 </div>
 
 <style>
-  /* ─── Window frame con bevel en esquina inferior-derecha ─────
-     Técnica: la .window es el "borde" (color del marco), y el .content
-     interno tiene el mismo clip-path con 1px menos.
-     Así el marco queda visible incluso en la diagonal biselada. */
+  /* ─── Window frame · glass morphism ─────────────────────────
+     La .window es la capa glass (translúcida con backdrop-filter).
+     El .content ocupa el interior y hereda el recorte de esquinas
+     de la .window gracias a overflow:hidden + border-radius. */
   .window {
     position: fixed;
     display: flex;
     flex-direction: column;
-    background: var(--border-bright);       /* color del marco */
-    padding: 1px;                             /* grosor del borde */
+    background: var(--window-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--window-border);
+    border-radius: var(--window-radius);
+    box-shadow: var(--window-shadow);
+    overflow: hidden;
     animation: win-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
-    box-shadow: 0 0 24px rgba(0, 255, 159, 0.06);
-    /* Bevel 14px en la esquina inferior-derecha (opuesta al sidebar) */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% calc(100% - 14px),
-      calc(100% - 14px) 100%,
-      0 100%
-    );
   }
   .window.dragging { user-select: none; }
   .window.maximized {
-    background: var(--bg) !important;
-    padding: 0 !important;
+    border-radius: 0 !important;
+    border: none !important;
     box-shadow: none !important;
-    clip-path: none !important;
     left: 0 !important;
     top: 0 !important;
     width: calc(100vw / var(--ui-zoom, 1)) !important;
@@ -234,7 +229,7 @@
     top: 0;
     left: 0;
     right: 140px; /* deja espacio para los wc-btn a la derecha */
-    height: 32px;
+    height: 36px;
     z-index: 5;
     cursor: default;
     pointer-events: auto;
@@ -244,20 +239,10 @@
     flex: 1;
     overflow: hidden;
     min-height: 0;
-    background: var(--bg);
-    /* Mismo clip-path que la .window pero 1px menos: así el marco queda visible */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% calc(100% - 13px),
-      calc(100% - 13px) 100%,
-      0 100%
-    );
-  }
-  .window.maximized .content {
-    clip-path: none !important;
+    background: transparent;
   }
 
+  /* Placeholder · cuando se abre un app sin módulo todavía */
   .placeholder {
     width: 100%;
     height: 100%;
@@ -265,17 +250,20 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 10px;
     color: var(--fg-mute);
-    background: var(--bg);
-    font-family: var(--font-mono);
+    background: transparent;
+    font-family: var(--font-sans);
   }
-  .ph-ic { font-size: 48px; }
+  .ph-ic {
+    font-size: 48px;
+    opacity: 0.85;
+  }
   .placeholder p {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
-    color: var(--fg-dim);
-    letter-spacing: 1px;
+    color: var(--fg);
+    letter-spacing: -0.2px;
   }
   .placeholder small {
     font-size: 10px;
@@ -284,23 +272,29 @@
     text-transform: uppercase;
   }
 
+  /* Handle de resize · esquina inferior derecha */
   .resize-handle {
     position: absolute;
-    bottom: 12px;  /* movido hacia dentro por el bevel de 14px */
-    right: 12px;
-    width: 16px;
-    height: 16px;
+    bottom: 0;
+    right: 0;
+    width: 18px;
+    height: 18px;
     cursor: nwse-resize;
     z-index: 10;
   }
   .resize-handle::before {
     content: '';
     position: absolute;
-    right: 0;
-    bottom: 0;
+    right: 4px;
+    bottom: 4px;
     width: 8px;
     height: 8px;
     background:
-      linear-gradient(135deg, transparent 0 3px, var(--fg-faint) 3px 4px, transparent 4px 6px, var(--fg-faint) 6px 7px, transparent 7px);
+      linear-gradient(135deg,
+        transparent 0 3px,
+        rgba(255, 255, 255, 0.25) 3px 4px,
+        transparent 4px 6px,
+        rgba(255, 255, 255, 0.25) 6px 7px,
+        transparent 7px);
   }
 </style>
