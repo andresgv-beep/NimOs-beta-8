@@ -106,6 +106,8 @@ html, body {
   --sidebar-width:   240px;
   --titlebar-height: 36px;
   --taskbar-height:  52px;
+  /* Taskbar flotante: altura + márgenes arriba/abajo (12 + 52 + 12 = 76) */
+  --taskbar-total:   76px;
 
   /* ── Radios glass ── */
   --radius-sm: 6px;
