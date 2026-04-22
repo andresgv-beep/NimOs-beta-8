@@ -221,7 +221,7 @@
     left: 0 !important;
     top: 0 !important;
     width: calc(100vw / var(--ui-zoom, 1)) !important;
-    height: calc((100vh - var(--taskbar-height, 52px)) / var(--ui-zoom, 1)) !important;
+    height: calc((100vh - var(--taskbar-total, 76px)) / var(--ui-zoom, 1)) !important;
   }
 
   .drag-zone {

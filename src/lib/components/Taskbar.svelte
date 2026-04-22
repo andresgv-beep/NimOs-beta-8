@@ -124,15 +124,27 @@
   <!-- ═══ IZQUIERDA ═══ -->
   <div class="tb-left">
 
-    <!-- Launcher button -->
+    <!-- Launcher button · logo NimOS 3 cubos -->
     <button
       class="tb-launcher-btn"
       on:click={() => showLauncher = !showLauncher}
       class:active={showLauncher}
       title="Apps"
     >
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path fill="currentColor" fill-rule="evenodd" d="M0 0h4v4H0V0zm0 6h4v4H0V6zm0 6h4v4H0v-4zM6 0h4v4H6V0zm0 6h4v4H6V6zm0 6h4v4H6v-4zm6-12h4v4h-4V0zm0 6h4v4h-4V6zm0 6h4v4h-4v-4z"/>
+      <svg class="nimos-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- 3 cubos isométricos · logo NimOS -->
+        <!-- Cubo superior -->
+        <path d="M12 2 L18 5 L12 8 L6 5 Z" fill="#ffffff" opacity="0.95"/>
+        <path d="M6 5 L12 8 L12 14 L6 11 Z" fill="#ffffff" opacity="0.65"/>
+        <path d="M18 5 L12 8 L12 14 L18 11 Z" fill="#ffffff" opacity="0.8"/>
+        <!-- Cubo inferior izquierdo -->
+        <path d="M6 13 L12 16 L6 19 L0 16 Z" fill="#ffffff" opacity="0.95"/>
+        <path d="M0 16 L6 19 L6 22 L0 19 Z" fill="#ffffff" opacity="0.5"/>
+        <path d="M12 16 L6 19 L6 22 L12 19 Z" fill="#ffffff" opacity="0.7"/>
+        <!-- Cubo inferior derecho -->
+        <path d="M18 13 L24 16 L18 19 L12 16 Z" fill="#ffffff" opacity="0.95"/>
+        <path d="M12 16 L18 19 L18 22 L12 19 Z" fill="#ffffff" opacity="0.5"/>
+        <path d="M24 16 L18 19 L18 22 L24 19 Z" fill="#ffffff" opacity="0.7"/>
       </svg>
     </button>
 
@@ -251,36 +263,25 @@
 </div>
 
 <style>
+  /* ═══════════════════════════════════════════════════════════
+     TASKBAR · glass flotante con mismo patrón que ventanas
+     ═══════════════════════════════════════════════════════════ */
   .taskbar {
     position: fixed;
-    left: 0; right: 0; bottom: 0;
+    left: 12px; right: 12px; bottom: 12px;
     height: var(--taskbar-height);
-    background: rgba(10, 10, 10, 0.88);
-    backdrop-filter: blur(20px) saturate(130%);
-    -webkit-backdrop-filter: blur(20px) saturate(130%);
-    border-top: 1px solid var(--border-bright);
+    background: var(--window-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--window-border);
+    border-radius: var(--window-radius);
+    box-shadow: var(--window-shadow);
     display: flex;
     align-items: stretch;
     padding: 0 12px;
     gap: 8px;
     z-index: 9000;
-    font-family: var(--font-mono);
-  }
-  /* Línea de acento arriba */
-  .taskbar::before {
-    content: '';
-    position: absolute;
-    top: -1px;
-    left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(
-      to right,
-      transparent 0%,
-      var(--accent-glow) 15%,
-      var(--accent-glow) 85%,
-      transparent 100%
-    );
-    opacity: 0.6;
+    font-family: var(--font-sans);
   }
 
   .tb-left, .tb-right {
@@ -294,9 +295,9 @@
   .tb-sep {
     width: 1px;
     align-self: center;
-    height: 24px;
+    height: 22px;
     background: var(--border);
-    margin: 0 4px;
+    margin: 0 6px;
   }
 
   .app-row {
@@ -304,34 +305,31 @@
     gap: 4px;
   }
 
-  /* ─── Launcher button ─── */
+  /* ─── Launcher button · logo NimOS sin marcos ─── */
   .tb-launcher-btn {
     width: 40px;
     height: 40px;
-    background: var(--bg);
-    color: var(--accent);
-    border: 1px solid var(--accent);
+    background: transparent;
+    border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.12s;
-    /* Mismo patrón de bevel que ventanas y popovers: solo inferior-derecha */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% calc(100% - 10px),
-      calc(100% - 10px) 100%,
-      0 100%
-    );
+    transition: background 0.12s, transform 0.1s;
+    border-radius: var(--radius-md);
+    padding: 0;
   }
   .tb-launcher-btn:hover {
-    background: var(--accent-dim);
-    box-shadow: 0 0 8px var(--accent-glow);
+    background: rgba(255, 255, 255, 0.08);
   }
   .tb-launcher-btn.active {
-    background: var(--accent-dim);
-    box-shadow: 0 0 10px var(--accent-glow);
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .tb-launcher-btn:active {
+    transform: scale(0.94);
+  }
+  .nimos-logo {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
   }
 
   /* ─── App icon ─── */
@@ -345,65 +343,71 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.1s;
+    transition: transform 0.1s, background 0.12s;
     padding: 0;
+    border-radius: var(--radius-md);
   }
-  .tb-app:hover { transform: translateY(-2px); }
+  .tb-app:hover {
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateY(-1px);
+  }
 
-  /* Legacy (fallback si quedase algún uso) */
   .tb-icon-img {
     width: 32px;
     height: 32px;
     object-fit: contain;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
   }
   .tb-emoji {
     font-size: 24px;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
   }
 
-  /* Línea verde bajo apps abiertas */
+  /* Dot bajo apps abiertas · más sutil que la línea retro */
   .tb-app.open::after {
     content: '';
     position: absolute;
-    bottom: 0;
+    bottom: -2px;
     left: 50%;
     transform: translateX(-50%);
-    width: 18px;
-    height: 2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 4px var(--accent-glow);
+    box-shadow: 0 0 6px var(--accent-glow);
   }
   .tb-app.focused::after {
-    width: 28px;
+    width: 18px;
+    border-radius: 2px;
   }
   .tb-app.minimized::after {
-    opacity: 0.5;
-    width: 10px;
+    opacity: 0.4;
+    width: 3px;
+    height: 3px;
   }
 
-  /* ─── Systray (tb-tray) ─── */
+  /* ─── Systray (tb-tray) · glass sutil ─── */
   .tb-tray {
     position: relative;
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(20, 20, 20, 0.5);
-    border: 1px solid var(--border);
+    background: transparent;
+    border: none;
     color: var(--fg-dim);
     font-size: 15px;
     cursor: pointer;
-    transition: all 0.1s;
-    clip-path: polygon(
-      0 0, calc(100% - 5px) 0, 100% 5px,
-      100% 100%, 5px 100%, 0 calc(100% - 5px)
-    );
+    transition: background 0.12s, color 0.12s;
+    border-radius: var(--radius-md);
   }
-  .tb-tray:hover,
+  .tb-tray:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--fg);
+  }
   .tb-tray.active {
-    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.1);
     color: var(--accent);
   }
   .tray-ic {
@@ -414,26 +418,23 @@
     position: absolute;
     top: 2px;
     right: 2px;
-    min-width: 14px;
-    height: 14px;
+    min-width: 15px;
+    height: 15px;
     padding: 0 4px;
     background: var(--crit);
-    color: var(--fg);
-    font-family: var(--font-mono);
-    font-size: 8px;
-    font-weight: 700;
+    color: #fff;
+    font-family: var(--font-sans);
+    font-size: 9px;
+    font-weight: 600;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 0 4px rgba(255, 90, 90, 0.5);
-    clip-path: polygon(
-      0 0, calc(100% - 3px) 0, 100% 3px,
-      100% 100%, 3px 100%, 0 calc(100% - 3px)
-    );
+    border-radius: 8px;
+    box-shadow: 0 0 4px rgba(248, 113, 113, 0.4);
   }
   .tray-badge.info {
     background: var(--info);
-    box-shadow: 0 0 4px rgba(77, 184, 255, 0.5);
+    box-shadow: 0 0 4px rgba(77, 184, 255, 0.4);
   }
 
   /* ─── Clock ─── */
@@ -441,51 +442,50 @@
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    padding: 0 10px;
-    line-height: 1.1;
+    padding: 0 10px 0 14px;
+    line-height: 1.15;
     cursor: pointer;
   }
   .clock-time {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 13px;
     color: var(--fg);
     font-weight: 600;
-    letter-spacing: 1px;
+    letter-spacing: 0.2px;
     font-feature-settings: "tnum";
   }
   .clock-date {
-    font-size: 8.5px;
+    font-size: 10px;
     color: var(--fg-mute);
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
     margin-top: 1px;
+    font-weight: 400;
   }
 
   /* ─── Power ─── */
   .tb-power {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(20, 20, 20, 0.5);
-    border: 1px solid var(--border);
+    background: transparent;
+    border: none;
     color: var(--fg-dim);
-    font-family: var(--font-mono);
-    font-size: 14px;
-    font-weight: 700;
+    font-family: var(--font-sans);
+    font-size: 16px;
     cursor: pointer;
-    transition: all 0.1s;
-    clip-path: polygon(
-      0 0, calc(100% - 5px) 0, 100% 5px,
-      100% 100%, 5px 100%, 0 calc(100% - 5px)
-    );
+    transition: background 0.12s, color 0.12s;
+    border-radius: var(--radius-md);
   }
   .tb-power:hover {
-    border-color: var(--crit);
+    background: rgba(248, 113, 113, 0.1);
     color: var(--crit);
   }
 
-  /* ─── Context menu ─── */
+  /* ═══════════════════════════════════════════════════════════
+     CONTEXT MENU · glass popover
+     ═══════════════════════════════════════════════════════════ */
   .ctx-overlay {
     position: fixed;
     inset: 0;
@@ -494,39 +494,42 @@
   .ctx-menu {
     position: fixed;
     min-width: 210px;
-    background: var(--bg-1);
-    border: 1px solid var(--accent);
-    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.8);
+    background: var(--glass-bg-strong);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--window-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--window-shadow);
     z-index: 9510;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    clip-path: polygon(
-      0 0, calc(100% - 6px) 0, 100% 6px,
-      100% 100%, 6px 100%, 0 calc(100% - 6px)
-    );
+    font-family: var(--font-sans);
+    font-size: 13px;
+    padding: 4px;
+    overflow: hidden;
   }
   .ctx-item {
-    padding: 8px 14px;
+    padding: 8px 12px;
     color: var(--fg);
     display: flex;
     align-items: center;
     gap: 10px;
     cursor: pointer;
-    transition: all 0.08s;
+    transition: background 0.08s, color 0.08s;
+    border-radius: 5px;
   }
   .ctx-item:hover {
-    background: var(--bg-2);
+    background: rgba(255, 255, 255, 0.08);
     color: var(--accent);
   }
   .ctx-ic {
     color: var(--fg-mute);
     width: 14px;
     text-align: center;
+    font-size: 12px;
   }
   .ctx-item:hover .ctx-ic { color: var(--accent); }
   .ctx-sep {
     height: 1px;
     background: var(--border);
-    margin: 2px 0;
+    margin: 4px 2px;
   }
 </style>
