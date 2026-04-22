@@ -82,19 +82,28 @@
     processing = true;
     errorMsg = '';
     try {
+      // Enviamos type y zpoolName junto al name para que el backend pueda
+      // procesarlo sin depender del storage.json (el pool huérfano/desmontado
+      // típicamente ya no está registrado ahí).
+      const payload = { name: expectedName };
+      if (pool?.type) payload.type = pool.type;
+      if (pool?.zpoolName) payload.zpoolName = pool.zpoolName;
+
       const res = await fetch('/api/storage/pool/destroy', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${$token}`,
         },
-        body: JSON.stringify({ name: expectedName }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
         // Errores específicos del backend
         if (data.error === 'pool_still_mounted' || data.error === 'pool_still_imported') {
           errorMsg = data.errorMsg || 'El pool sigue montado. Desmóntalo antes de destruirlo.';
+        } else if (data.error === 'destroy_failed') {
+          errorMsg = data.errorMsg || 'No se pudo destruir el pool. Revisa el sistema y reintenta.';
         } else {
           errorMsg = data.errorMsg || data.error || `Error ${res.status}`;
         }
