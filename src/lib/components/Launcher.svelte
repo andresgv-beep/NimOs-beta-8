@@ -9,7 +9,6 @@
   import { openWindow, windowList } from '$lib/stores/windows.js';
   import { getToken } from '$lib/stores/auth.js';
   import Badge from '$lib/ui/Badge.svelte';
-  import KeyBind from '$lib/ui/KeyBind.svelte';
 
   export let visible = false;
 
@@ -241,25 +240,16 @@
       {/if}
     </div>
 
-    <!-- Footer -->
-    <div class="lch-footer">
-      <span class="keyhint"><KeyBind key="↑↓←→" /> <span>navegar</span></span>
-      <span class="keyhint"><KeyBind key="↵" /> <span>abrir</span></span>
-      <span class="keyhint"><KeyBind key="ESC" /> <span>cerrar</span></span>
-    </div>
-
     </div>
   </div>
 {/if}
 
 <style>
-  /* Overlay de fondo (blur sutil al resto del escritorio) */
+  /* Overlay · solo captura click para cerrar, sin efectos visuales */
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.25);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
+    background: transparent;
     z-index: 9100;
   }
 
@@ -271,7 +261,8 @@
     left: 16px;
     bottom: calc(var(--taskbar-height) + 12px);
     width: 720px;
-    max-height: 75vh;
+    height: 780px;
+    max-height: calc(100vh - var(--taskbar-height) - 24px);
     background: var(--glass-bg-strong);
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
@@ -552,24 +543,5 @@
   .empty-msg b {
     color: var(--fg);
     font-weight: 500;
-  }
-
-  /* Footer · keybinds */
-  .lch-footer {
-    display: flex;
-    align-items: center;
-    padding: 10px 18px;
-    border-top: 1px solid var(--border);
-    font-family: var(--font-sans);
-    font-size: 11px;
-    color: var(--fg-mute);
-    letter-spacing: 0;
-    gap: 16px;
-    flex-shrink: 0;
-  }
-  .keyhint {
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
 </style>
