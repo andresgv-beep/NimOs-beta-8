@@ -253,36 +253,37 @@
 {/if}
 
 <style>
+  /* Overlay de fondo (blur sutil al resto del escritorio) */
   .overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
     z-index: 9100;
   }
 
+  /* ═══════════════════════════════════════════════════════════
+     LAUNCHER · popover glass sobre taskbar
+     ═══════════════════════════════════════════════════════════ */
   .launcher {
     position: fixed;
     left: 16px;
     bottom: calc(var(--taskbar-height) + 12px);
     width: 720px;
     max-height: 75vh;
-    background: var(--border-bright);   /* color del marco */
-    padding: 1px;                         /* grosor del borde */
-    box-shadow: 0 0 24px rgba(0, 255, 159, 0.06);
-    /* Bevel 14px en esquina inferior-derecha como la ventana */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% calc(100% - 14px),
-      calc(100% - 14px) 100%,
-      0 100%
-    );
-    font-family: var(--font-mono);
+    background: var(--glass-bg-strong);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--window-border);
+    border-radius: var(--window-radius);
+    box-shadow: var(--window-shadow);
+    font-family: var(--font-sans);
     z-index: 9200;
     display: flex;
     flex-direction: column;
-    animation: lch-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+    overflow: hidden;
+    animation: lch-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .lch-inner {
@@ -290,17 +291,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--glass-bg);
-    backdrop-filter: blur(24px) saturate(140%);
-    -webkit-backdrop-filter: blur(24px) saturate(140%);
-    /* Mismo clip-path 1px más pequeño para que la línea del marco quede visible */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% calc(100% - 13px),
-      calc(100% - 13px) 100%,
-      0 100%
-    );
+    background: transparent;
   }
 
   @keyframes lch-in {
@@ -308,60 +299,66 @@
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
 
-  /* Header */
+  /* ─── Header · título + búsqueda ─── */
   .lch-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px 16px 10px 18px;
-    border-bottom: 1px solid var(--border);
-    background: rgba(20, 20, 20, 0.4);
+    gap: 14px;
+    padding: 14px 18px 12px;
     flex-shrink: 0;
   }
   .lch-title {
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--fg);
-    letter-spacing: 2px;
+    letter-spacing: 1.5px;
     text-transform: uppercase;
     font-weight: 600;
     flex-shrink: 0;
   }
   .lch-title-ic {
-    width: 18px; height: 18px;
-    border: 1px solid var(--accent);
+    width: 22px; height: 22px;
+    background: var(--accent-dim);
     color: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
-    font-weight: 700;
-    clip-path: polygon(0 0, calc(100% - 3px) 0, 100% 3px, 100% 100%, 3px 100%, 0 calc(100% - 3px));
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
   }
   .lch-counter {
-    color: var(--fg-dim);
-    font-size: 9px;
-    letter-spacing: 1px;
+    color: var(--fg-mute);
+    font-size: 10px;
+    letter-spacing: 0.5px;
     font-weight: 400;
     text-transform: none;
   }
-  .lch-counter .c { color: var(--accent); font-weight: 600; }
+  .lch-counter .c { color: var(--fg); font-weight: 500; }
 
+  /* Search · input glass */
   .lch-search {
     flex: 1;
-    height: 26px;
+    height: 32px;
     border: 1px solid var(--border);
-    background: rgba(10, 10, 10, 0.6);
-    padding: 0 10px;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0 12px;
     display: flex;
     align-items: center;
     gap: 8px;
-    clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+    border-radius: 6px;
+    transition: border-color 0.12s, background 0.12s;
   }
-  .lch-search:focus-within { border-color: var(--accent); }
-  .lch-search-ic { color: var(--fg-mute); font-size: 11px; }
+  .lch-search:focus-within {
+    border-color: rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .lch-search-ic {
+    color: var(--fg-mute);
+    font-size: 13px;
+  }
   .lch-search input {
     flex: 1;
     background: transparent;
@@ -369,60 +366,68 @@
     outline: none;
     color: var(--fg);
     font-family: inherit;
-    font-size: 10px;
-    letter-spacing: 0.5px;
+    font-size: 13px;
+    letter-spacing: 0;
   }
-  .lch-search input::placeholder { color: var(--fg-mute); }
+  .lch-search input::placeholder {
+    color: var(--fg-faint);
+  }
   .lch-search-key {
-    font-size: 9px;
+    font-size: 10px;
     color: var(--fg-faint);
     border: 1px solid var(--border);
-    padding: 0 4px;
+    padding: 1px 6px;
     letter-spacing: 0.5px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
   }
 
-  /* Tabs */
+  /* ─── Tabs · pills modernas ─── */
   .lch-tabs {
     display: flex;
     gap: 4px;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    background: rgba(15, 15, 15, 0.3);
+    padding: 0 18px 10px;
     flex-shrink: 0;
   }
   .lch-tab {
     background: transparent;
-    border: 1px solid transparent;
+    border: none;
     color: var(--fg-dim);
     font-family: inherit;
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 5px 12px;
     cursor: pointer;
-    transition: all 0.1s;
+    transition: background 0.12s, color 0.12s;
     display: flex;
     align-items: center;
     gap: 6px;
-    clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+    border-radius: 6px;
   }
-  .lch-tab:hover { color: var(--fg); background: rgba(255, 255, 255, 0.03); }
+  .lch-tab:hover {
+    color: var(--fg);
+    background: rgba(255, 255, 255, 0.05);
+  }
   .lch-tab.active {
     color: var(--accent);
-    border-color: var(--accent);
-    background: rgba(0, 255, 159, 0.06);
+    background: var(--accent-dim);
   }
   .tab-n {
-    font-size: 8px;
+    font-size: 11px;
     color: var(--fg-faint);
     font-feature-settings: "tnum";
+    font-weight: 400;
   }
-  .lch-tab.active .tab-n { color: var(--accent); }
+  .lch-tab.active .tab-n {
+    color: var(--accent);
+    opacity: 0.8;
+  }
 
-  /* Body */
+  /* ─── Body · grid de apps ─── */
   .lch-body {
-    padding: 18px 16px 20px;
+    padding: 6px 14px 20px;
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -434,25 +439,22 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 9px;
-    color: var(--fg-mute);
-    letter-spacing: 1.8px;
+    font-size: 10px;
+    color: var(--fg-faint);
+    letter-spacing: 1.5px;
     text-transform: uppercase;
-    padding: 0 4px 4px;
+    font-weight: 600;
+    padding: 4px 6px 2px;
   }
-  .lch-section-head::before { content: '──'; color: var(--fg-faint); }
-  .lch-section-head::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: linear-gradient(to right, var(--border) 0%, var(--border) 70%, transparent 100%);
+  .lch-section-head .c {
+    color: var(--fg-mute);
+    font-weight: 400;
   }
-  .lch-section-head .c { color: var(--accent); font-weight: 600; }
 
   .lch-grid {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
-    gap: 6px;
+    gap: 4px;
   }
 
   .lch-app {
@@ -461,17 +463,14 @@
     flex-direction: column;
     align-items: center;
     gap: 8px;
-    padding: 14px 8px 10px;
+    padding: 14px 8px 12px;
     cursor: pointer;
-    border: 1px solid transparent;
-    transition: all 0.1s;
-    clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+    transition: background 0.1s;
+    border-radius: 8px;
   }
   .lch-app:hover {
-    border-color: var(--border-bright);
-    background: rgba(255, 255, 255, 0.025);
+    background: rgba(255, 255, 255, 0.06);
   }
-  .lch-app:hover .lch-app-label { color: var(--accent); }
 
   .lch-icon {
     width: 52px;
@@ -482,7 +481,9 @@
     filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4));
     transition: transform 0.15s;
   }
-  .lch-app:hover .lch-icon { transform: translateY(-2px) scale(1.04); }
+  .lch-app:hover .lch-icon {
+    transform: translateY(-2px) scale(1.04);
+  }
   .lch-icon img {
     width: 48px;
     height: 48px;
@@ -494,10 +495,11 @@
   }
 
   .lch-app-label {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
+    font-family: var(--font-sans);
+    font-size: 12px;
     color: var(--fg-dim);
-    letter-spacing: 0.4px;
+    letter-spacing: 0;
+    font-weight: 400;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
@@ -505,20 +507,25 @@
     max-width: 100%;
     transition: color 0.1s;
   }
+  .lch-app:hover .lch-app-label {
+    color: var(--fg);
+  }
 
-  /* Running indicator */
+  /* Running indicator · dot verde debajo */
   .lch-app.running::after {
     content: '';
     position: absolute;
     bottom: 4px;
     left: 50%;
     transform: translateX(-50%);
-    width: 14px;
-    height: 2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 3px var(--accent-glow);
+    box-shadow: 0 0 4px var(--accent-glow);
   }
 
+  /* Empty state · sin resultados */
   .empty {
     display: flex;
     flex-direction: column;
@@ -529,36 +536,40 @@
   }
   .empty-ic {
     width: 44px; height: 44px;
-    border: 1px solid var(--border-bright);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 18px;
-    clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+    font-size: 20px;
+    border-radius: 8px;
+    color: var(--fg-faint);
   }
   .empty-msg {
-    font-size: 11px;
-    letter-spacing: 0.5px;
+    font-size: 13px;
+    letter-spacing: 0;
   }
-  .empty-msg b { color: var(--fg-dim); }
+  .empty-msg b {
+    color: var(--fg);
+    font-weight: 500;
+  }
 
-  /* Footer */
+  /* Footer · keybinds */
   .lch-footer {
     display: flex;
     align-items: center;
-    padding: 8px 14px;
+    padding: 10px 18px;
     border-top: 1px solid var(--border);
-    background: rgba(20, 20, 20, 0.5);
-    font-family: var(--font-mono);
-    font-size: 9px;
+    font-family: var(--font-sans);
+    font-size: 11px;
     color: var(--fg-mute);
-    letter-spacing: 0.6px;
-    gap: 14px;
+    letter-spacing: 0;
+    gap: 16px;
     flex-shrink: 0;
   }
   .keyhint {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
   }
 </style>
