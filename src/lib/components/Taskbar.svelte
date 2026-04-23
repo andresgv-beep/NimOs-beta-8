@@ -275,7 +275,7 @@
   .tb-left, .tb-right {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 6px 0;
   }
   .tb-center { flex: 1; }
@@ -290,7 +290,7 @@
 
   .app-row {
     display: flex;
-    gap: 4px;
+    gap: 8px;
   }
 
   /* ─── Launcher button · logo NimOS sin marcos ─── */
