@@ -60,8 +60,11 @@
     ctxMenu = {
       appId,
       win,
+      // Posicionar por bottom (crece hacia arriba) y horizontalmente limitado al viewport.
+      // bottom = distancia desde el borde inferior del viewport hasta el punto de click,
+      // más un pequeño gap. El menú nunca se sale por abajo porque está anclado por su lado bottom.
       x: Math.min(e.clientX, window.innerWidth - 220),
-      y: Math.max(8, e.clientY - 140),
+      bottom: window.innerHeight - e.clientY + 8,
     };
   }
   function closeCtxMenu() { ctxMenu = null; }
@@ -104,7 +107,7 @@
 <!-- Context menu click outside -->
 {#if ctxMenu}
   <div class="ctx-overlay" on:click={closeCtxMenu} role="presentation"></div>
-  <div class="ctx-menu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px">
+  <div class="ctx-menu" style="left:{ctxMenu.x}px; bottom:{ctxMenu.bottom}px">
     <div class="ctx-item" on:click={() => togglePin(ctxMenu.appId)} role="button" tabindex="0">
       <span class="ctx-ic">◆</span>
       <span>{isPinned(ctxMenu.appId) ? 'Desanclar del taskbar' : 'Anclar al taskbar'}</span>
