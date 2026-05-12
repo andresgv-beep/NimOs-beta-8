@@ -118,10 +118,11 @@ type Device struct {
 
 ```go
 // Operation representa una operación de storage en curso o histórica.
-// Las mutaciones largas se modelan como Operations persistidas.
+// Las mutaciones se modelan como Operations persistidas, INCLUSO LAS SÍNCRONAS.
+// Esto mantiene un timeline consistente y auditoría completa.
 type Operation struct {
     ID          string          // UUID
-    Type        OperationType   // create_pool | add_device | replace_device | ...
+    Type        OperationType   // create_pool | add_device | rename_pool | ...
     PoolID      *string         // nil para operaciones que crean el pool
     Status      OperationStatus // pending | in_progress | completed | failed | rolled_back
     StartedAt   time.Time
@@ -132,9 +133,61 @@ type Operation struct {
     Events      []Event         // timeline (cargado bajo demanda)
 }
 
+// OperationMode indica si la operación se completa dentro de la petición
+// HTTP (sync) o si requiere polling de /api/storage/operations/:id (async).
+type OperationMode string
+
+const (
+    OperationModeSync  OperationMode = "sync"   // completa en la respuesta HTTP
+    OperationModeAsync OperationMode = "async"  // requiere polling posterior
+)
+
+// operationModeMap es la verdad sobre qué operaciones son sync o async.
+// NO se puede cambiar por handler. Si necesitas cambiar el modo de una
+// operación, edita esta tabla y todo el código se ajusta automáticamente.
+var operationModeMap = map[OperationType]OperationMode{
+    // Sync — completan en milisegundos
+    OpTypeRenamePool:     OperationModeSync,
+    OpTypeChangeRole:     OperationModeSync,
+    OpTypeSetCompression: OperationModeSync,
+    OpTypeSetScrubPolicy: OperationModeSync,
+    OpTypeControlChange:  OperationModeSync,
+    OpTypeBalancePause:   OperationModeSync,
+    OpTypeBalanceResume:  OperationModeSync,
+
+    // Async — segundos a horas
+    OpTypeCreatePool:     OperationModeAsync,
+    OpTypeDestroyPool:    OperationModeAsync,
+    OpTypeAddDevice:      OperationModeAsync,
+    OpTypeRemoveDevice:   OperationModeAsync,
+    OpTypeReplaceDevice:  OperationModeAsync,
+    OpTypeConvertProfile: OperationModeAsync,
+    OpTypeStartScrub:     OperationModeAsync,
+    OpTypeCreateSnapshot: OperationModeAsync,
+    OpTypeDeleteSnapshot: OperationModeAsync,
+    OpTypeImportPool:     OperationModeAsync,
+}
+
+func (op OperationType) Mode() OperationMode {
+    if mode, ok := operationModeMap[op]; ok {
+        return mode
+    }
+    return OperationModeAsync  // safe default si se añade una operación sin mapear
+}
+
 type OperationType string
 
 const (
+    // Sync ops (metadata mutations)
+    OpTypeRenamePool       OperationType = "rename_pool"
+    OpTypeChangeRole       OperationType = "change_role"
+    OpTypeSetCompression   OperationType = "set_compression"
+    OpTypeSetScrubPolicy   OperationType = "set_scrub_policy"
+    OpTypeControlChange    OperationType = "control_state_change"
+    OpTypeBalancePause     OperationType = "balance_pause"
+    OpTypeBalanceResume    OperationType = "balance_resume"
+
+    // Async ops (long-running)
     OpTypeCreatePool       OperationType = "create_pool"
     OpTypeDestroyPool      OperationType = "destroy_pool"
     OpTypeAddDevice        OperationType = "add_device"
@@ -145,7 +198,6 @@ const (
     OpTypeCreateSnapshot   OperationType = "create_snapshot"
     OpTypeDeleteSnapshot   OperationType = "delete_snapshot"
     OpTypeImportPool       OperationType = "import_pool"
-    OpTypeControlChange    OperationType = "control_state_change"
 )
 
 type OperationStatus string
@@ -159,6 +211,21 @@ const (
     OpStatusCancelled   OperationStatus = "cancelled"
 )
 ```
+
+**Invariante crítica**: TODA mutación genera una `Operation`, sea sync o async. La diferencia entre sync y async no es "si se registra", sino "si la respuesta HTTP espera al resultado o no":
+
+- **Sync**: handler crea operation → ejecuta → marca completed/failed → responde con `{pool, operation}` en una sola llamada HTTP (200 OK)
+- **Async**: handler crea operation → lanza goroutine → responde inmediatamente con `{operation}` (202 Accepted) → cliente hace polling
+
+**Beneficio del modelo unificado**:
+- Timeline completo: aparecen TODAS las acciones, no solo las largas
+- Auditoría real: "¿quién renombró el pool data?" → consulta el histórico
+- Debugging: si hay un patrón raro de cambios de role, queda registrado
+- Modelo mental único: una sola forma de pensar las mutaciones, no dos
+
+**Coste**: una row más en SQLite por mutación. Despreciable.
+
+
 
 ### 2.4 Event
 
