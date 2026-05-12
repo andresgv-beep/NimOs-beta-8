@@ -678,31 +678,96 @@ _, err := db.Exec(`INSERT INTO storage_pool_devices (pool_id, device_id, added_a
 assert.Error(t, err, "FK should have rejected this")
 ```
 
+### 7.6 Containment estricto del código legacy
+
+**Regla**: todo el código de compatibilidad hacia atrás vive **exclusivamente** en `storage_legacy.go`. No filtra a ningún otro archivo.
+
+**Razón**: el patrón anti-pattern más común en refactors con backward compatibility es que la "capa temporal" se acaba metiendo en sitios nuevos. Cuando eso pasa, el modelo viejo persiste indefinidamente y el refactor pierde valor.
+
+**Reglas duras**:
+1. `storage_legacy.go` es el único archivo donde aparecen las funciones de compatibilidad
+2. Código nuevo (`storage_service.go`, `storage_repo.go`, `storage_btrfs.go`, etc.) **nunca** llama a funciones legacy
+3. Funciones legacy solo llaman a `service` o `repo`, nunca entre sí
+4. Cada función legacy lleva comentario explícito de consumers y replacement plan
+
+Detalle completo en §8.1.
+
 ---
 
 ## 8. Backward compatibility — Funciones legacy
 
 El resto del daemon (`docker.go`, `shares.go`, `services.go`) llama a estas funciones por nombre. **Mantienen la firma** para no requerir cambios en otros módulos. Internamente delegan al nuevo `StorageService`.
 
+### 8.1 Regla de containment estricto
+
+**Toda la lógica legacy vive en un único archivo: `storage_legacy.go`**.
+
+Esta regla NO es una sugerencia. Es **una invariante de proyecto** porque la deuda técnica más persistente nace de "adaptadores temporales que se vuelven permanentes". Para evitarlo:
+
+1. **Una sola puerta**: `storage_legacy.go` es el único archivo donde puede aparecer código que conecta el modelo viejo con el nuevo.
+
+2. **Las funciones legacy NUNCA llaman a otras funciones legacy**. Solo llaman al `StorageService` o `StorageRepo`. Si una función legacy necesita ayuda de otra, la ayuda se implementa en el service/repo, no como helper legacy.
+
+3. **El nuevo código NUNCA llama a funciones legacy**. Solo el código antiguo (`docker.go`, `shares.go`, `services.go`) las consume. Si en `storage_service.go` o `storage_repo.go` aparece una llamada a `getStorageConfigFull()`, **es un bug**.
+
+4. **Cada función legacy lleva un comentario explícito** indicando quién la llama y cuándo se eliminará:
+
 ```go
-// LEGACY: usado por docker.go, shares.go, services.go
+// LEGACY (TO REMOVE IN BETA 9)
+// Consumers: docker.go (listContainers), shares.go (resolveSharePath)
+// Replacement: call service.GetStorageConfig() directly from caller
+//
 // Devuelve la config como map (mismo shape que el viejo storage.json)
+// para que los consumers no necesiten cambios en Beta 8.
+//
+// NO LLAMAR DESDE NUEVO CÓDIGO. Solo existe por compatibilidad.
+func getStorageConfigFull() map[string]interface{}
+```
+
+5. **Build tag o linter para prevenir filtración**: opcionalmente, se puede añadir una build tag o un lint rule que prohíba importar `storage_legacy.go` desde archivos no permitidos. Beta 8 puede dejar esto como TODO; Beta 9 lo formaliza.
+
+### 8.2 Lista de funciones legacy
+
+```go
+// LEGACY (TO REMOVE IN BETA 9)
+// Consumers: docker.go, shares.go, services.go
+// Replacement: service.GetStorageConfig() / service.GetPool(name)
 func getStorageConfigFull() map[string]interface{}
 
-// LEGACY: usado por shares.go
+// LEGACY (TO REMOVE IN BETA 9)
+// Consumers: shares.go
+// Replacement: service.UpdatePool() / service.UpdateMetadata()
 func saveStorageConfigFull(config map[string]interface{}) error
 
-// LEGACY: usado por docker.go
+// LEGACY (TO REMOVE IN BETA 9)
+// Consumers: docker.go
+// Replacement: repo.HasAnyPool(ctx)
 func hasPoolGo() bool
 
-// LEGACY: usado por shares.go, services.go
+// LEGACY (TO REMOVE IN BETA 9)
+// Consumers: shares.go, services.go
+// Replacement: service.ListPools(ctx) y construir el map en el caller si hace falta
 func getStoragePoolsGo() []map[string]interface{}
 
-// LEGACY: usado por handlers HTTP del frontend
+// LEGACY (TO REMOVE IN BETA 9)
+// Consumers: handlers HTTP antiguos del frontend (mientras el frontend no migre a REST nuevo)
+// Replacement: GET /api/storage/devices (REST nuevo)
 func detectStorageDisksGo() map[string]interface{}
 ```
 
-**Plan de migración**: en Beta 9 estas funciones se marcan `deprecated` y se reemplazan progresivamente por llamadas directas al `StorageService` desde los módulos consumidores. Beta 8 las conserva por compatibilidad.
+### 8.3 Plan de eliminación (Beta 9)
+
+En Beta 9, el flujo de eliminación de cada función legacy es:
+
+1. Marcar la función con `// Deprecated:` en el comentario
+2. Identificar cada caller (con `grep -r`)
+3. Migrar el caller a usar `StorageService` directamente
+4. Verificar que ningún caller queda
+5. Eliminar la función legacy
+6. Repetir hasta vaciar `storage_legacy.go`
+7. Cuando el archivo quede vacío, **eliminarlo**
+
+**Criterio de Beta 9 completada**: `storage_legacy.go` no existe.
 
 ---
 
