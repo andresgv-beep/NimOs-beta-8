@@ -688,6 +688,12 @@ func main() {
 	}
 	logMsg("Storage schema (Beta 8) ready")
 
+	// Initialize Beta 8 storage module (Repo + Policy singletons)
+	if err := initStorageModule(); err != nil {
+		logMsg("ERROR: cannot initialize storage module: %v", err)
+		os.Exit(1)
+	}
+
 	// Start HTTP API server
 	detectHardwareTools()
 	startHTTPServer()
