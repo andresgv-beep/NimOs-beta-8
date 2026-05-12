@@ -680,6 +680,14 @@ func main() {
 	// Migrate from JSON files (first run only)
 	migrateFromJSON()
 
+	// Initialize Beta 8 storage schema (idempotent)
+	// see docs/storage_invariants.md#5
+	if err := initStorageSchema(); err != nil {
+		logMsg("ERROR: cannot initialize storage schema: %v", err)
+		os.Exit(1)
+	}
+	logMsg("Storage schema (Beta 8) ready")
+
 	// Start HTTP API server
 	detectHardwareTools()
 	startHTTPServer()
