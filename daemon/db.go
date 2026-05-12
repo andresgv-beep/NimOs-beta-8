@@ -40,6 +40,14 @@ func openDB() error {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
+	// Force foreign_keys ON explicitly. The query string `?_foreign_keys=ON`
+	// is not honored by modernc.org/sqlite, so we set it via PRAGMA after
+	// opening. Required for CASCADE/RESTRICT in storage_* tables to work.
+	// see docs/storage_invariants.md#5.1
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("cannot enable foreign_keys: %v", err)
+	}
+
 	if err := createTables(); err != nil {
 		return fmt.Errorf("cannot create tables: %v", err)
 	}
