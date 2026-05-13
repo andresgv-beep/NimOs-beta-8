@@ -507,11 +507,12 @@ func (r *StorageRepo) ListDevicesInPool(ctx context.Context, poolID string) ([]*
 // UpsertDevice inserta o actualiza un device. Matching por serial (identidad
 // absoluta). Si el serial existe, actualiza by_id_path, current_path y model
 // (que pueden cambiar entre reboots o tras kernel updates).
+// Devuelve true si fue INSERT (nuevo), false si fue UPDATE (existente).
 // Debe llamarse dentro de una transacción.
 // see docs/storage_invariants.md#3
-func (r *StorageRepo) UpsertDevice(ctx context.Context, tx *sql.Tx, d *Device) error {
+func (r *StorageRepo) UpsertDevice(ctx context.Context, tx *sql.Tx, d *Device) (wasInsert bool, err error) {
 	if d.Serial == "" {
-		return fmt.Errorf("UpsertDevice: serial is required (no identity)")
+		return false, fmt.Errorf("UpsertDevice: serial is required (no identity)")
 	}
 	if d.LastSeenAt.IsZero() {
 		d.LastSeenAt = time.Now().UTC()
@@ -519,7 +520,7 @@ func (r *StorageRepo) UpsertDevice(ctx context.Context, tx *sql.Tx, d *Device) e
 
 	// Buscar por serial primero (identidad absoluta).
 	var existingID string
-	err := tx.QueryRowContext(ctx,
+	err = tx.QueryRowContext(ctx,
 		`SELECT id FROM storage_devices WHERE serial = ?`, d.Serial).Scan(&existingID)
 
 	if err == sql.ErrNoRows {
@@ -536,8 +537,9 @@ func (r *StorageRepo) UpsertDevice(ctx context.Context, tx *sql.Tx, d *Device) e
 			d.LastSeenAt.Format(time.RFC3339Nano),
 		)
 		if err != nil {
-			return fmt.Errorf("UpsertDevice INSERT: %w", err)
+			return false, fmt.Errorf("UpsertDevice INSERT: %w", err)
 		}
+		wasInsert = true
 	} else if err == nil {
 		// Disco conocido: actualizar campos volátiles. by_id_path y current_path
 		// pueden cambiar entre reboots; serial nunca.
@@ -554,15 +556,18 @@ func (r *StorageRepo) UpsertDevice(ctx context.Context, tx *sql.Tx, d *Device) e
 			existingID,
 		)
 		if err != nil {
-			return fmt.Errorf("UpsertDevice UPDATE: %w", err)
+			return false, fmt.Errorf("UpsertDevice UPDATE: %w", err)
 		}
 		d.ID = existingID
+		wasInsert = false
 	} else {
-		return fmt.Errorf("UpsertDevice lookup: %w", err)
+		return false, fmt.Errorf("UpsertDevice lookup: %w", err)
 	}
 
-	_, err = r.incrementGlobalGeneration(ctx, tx)
-	return err
+	if _, err := r.incrementGlobalGeneration(ctx, tx); err != nil {
+		return wasInsert, err
+	}
+	return wasInsert, nil
 }
 
 // UpdateDeviceCurrentPath actualiza solo el current_path (cache runtime).
