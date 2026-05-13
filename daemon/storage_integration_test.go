@@ -409,6 +409,12 @@ func TestStorageIntegrationAddRemoveDevice(t *testing.T) {
 
 // TestStorageIntegrationWipeDeviceRejectsBootDisk verifica que el guard
 // de WipeDevice rechaza wipear el disco de boot del sistema.
+//
+// El test verifica DOS cosas:
+//   1. Se rechaza (err != nil)
+//   2. Se rechaza por la razón CORRECTA ("refusing to wipe boot disk"),
+//      no por un error secundario como "cannot resolve symlink".
+//      Esto detecta regresiones en parentDeviceOf / isBootDisk.
 func TestStorageIntegrationWipeDeviceRejectsBootDisk(t *testing.T) {
 	requireBtrfs(t)
 
@@ -432,15 +438,29 @@ func TestStorageIntegrationWipeDeviceRejectsBootDisk(t *testing.T) {
 		t.Skip("cannot determine root device")
 	}
 
-	// Resolver a su disco padre (sda1 → sda)
+	// Resolver a su disco padre usando la MISMA función que usa el executor.
+	// Esto verifica que parentDeviceOf maneja NVMe (nvme0n1p2 → nvme0n1)
+	// además de sd*, vd*, hd*.
 	realRoot, _ := filepath.EvalSymlinks(rootDev)
-	parent := strings.TrimRight(realRoot, "0123456789")
-	t.Logf("Boot disk parent: %s", parent)
+	parent := parentDeviceOf(realRoot)
+	t.Logf("Boot partition: %s → parent disk: %s", realRoot, parent)
+
+	// Sanity check: el parent debe existir como path real
+	if _, statErr := os.Stat(parent); statErr != nil {
+		t.Fatalf("parentDeviceOf produced invalid path %q: %v", parent, statErr)
+	}
 
 	// Intentar wipear el disco padre del boot
 	err = executor.WipeDevice(ctx, parent)
 	if err == nil {
 		t.Fatalf("WipeDevice should REFUSE to wipe boot disk %s", parent)
 	}
-	t.Logf("Correctly refused: %v", err)
+
+	// CRÍTICO: debe rechazarse por "refusing to wipe boot disk", no por
+	// otra razón (símbolo no resoluble, etc.). El mensaje correcto
+	// confirma que el guard de boot ejecutó correctamente.
+	if !strings.Contains(err.Error(), "refusing to wipe boot disk") {
+		t.Errorf("expected error to mention 'refusing to wipe boot disk', got: %v", err)
+	}
+	t.Logf("Correctly refused for the right reason: %v", err)
 }

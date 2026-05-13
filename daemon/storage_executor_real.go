@@ -318,6 +318,9 @@ func (e *RealBtrfsExecutor) WipeDevice(ctx context.Context, byIDPath string) err
 
 // isBootDisk devuelve true si el device es el disco de boot del sistema.
 // Lo determina viendo qué device contiene la partición montada en "/".
+//
+// Soporta tanto particiones tradicionales (sda1 → sda) como NVMe
+// (nvme0n1p2 → nvme0n1).
 func isBootDisk(realPath string) bool {
 	// Leer /proc/mounts y encontrar lo que está montado en "/"
 	data, err := os.ReadFile("/proc/mounts")
@@ -345,17 +348,62 @@ func isBootDisk(realPath string) bool {
 		return true
 	}
 
-	// Si el realPath es la partición del root, o su disco padre, es boot.
-	// Ej: realPath=/dev/sda, rootReal=/dev/sda1 → es boot.
+	// Si el realPath es la partición del root, es boot.
 	if rootReal == realPath {
 		return true
 	}
-	// strip dígito final de rootReal para sacar el disco padre
-	parent := strings.TrimRight(rootReal, "0123456789")
-	if parent == realPath {
-		return true
+	// Si el realPath es el disco padre de la partición root, también es boot.
+	parent := parentDeviceOf(rootReal)
+	return parent == realPath
+}
+
+// parentDeviceOf devuelve el disco padre de una partición.
+//
+// Convenciones del kernel Linux:
+//   - sd*, vd*, hd*: la partición es <disk><N>  (sda1 → sda)
+//   - nvme*:         la partición es <disk>p<N> (nvme0n1p2 → nvme0n1)
+//   - mmc*:          la partición es <disk>p<N> (mmcblk0p1 → mmcblk0)
+//
+// Si el path no parece una partición, devuelve el path original.
+func parentDeviceOf(devicePath string) string {
+	base := filepath.Base(devicePath)
+	dir := filepath.Dir(devicePath)
+
+	// NVMe / MMC: <disk>p<N> donde <disk> también contiene dígitos
+	// (nvme0n1, mmcblk0). El separador "p" es el indicador.
+	if strings.HasPrefix(base, "nvme") || strings.HasPrefix(base, "mmcblk") {
+		// Buscar el último "p" seguido SOLO de dígitos al final
+		idx := strings.LastIndex(base, "p")
+		if idx > 0 {
+			suffix := base[idx+1:]
+			if suffix != "" && allDigits(suffix) {
+				return filepath.Join(dir, base[:idx])
+			}
+		}
+		// No tiene "pN" al final: es el disco entero, no una partición
+		return devicePath
 	}
-	return false
+
+	// sd*, vd*, hd*: stripping de dígitos finales
+	trimmed := strings.TrimRight(base, "0123456789")
+	if trimmed == base {
+		// No tenía dígitos al final → ya es el disco, no una partición
+		return devicePath
+	}
+	return filepath.Join(dir, trimmed)
+}
+
+// allDigits devuelve true si s no está vacía y solo contiene dígitos.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isDeviceMounted devuelve true si el device está montado en alguna parte.
