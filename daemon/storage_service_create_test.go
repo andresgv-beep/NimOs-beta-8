@@ -29,7 +29,7 @@ func registerTestDevices(t *testing.T, service *StorageService, count int) []str
 	tx, _ := service.db.BeginTx(ctx, nil)
 	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("dev-%d", i+1)
-		err := service.repo.UpsertDevice(ctx, tx, &Device{
+		_, err := service.repo.UpsertDevice(ctx, tx, &Device{
 			ID:          id,
 			Serial:      fmt.Sprintf("TEST-SERIAL-%d", i+1),
 			ByIDPath:    fmt.Sprintf("/dev/disk/by-id/test-%d", i+1),

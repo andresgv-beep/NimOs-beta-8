@@ -19,7 +19,8 @@ import (
 )
 
 // setupTestService crea un StorageService apoyado en una DB SQLite temporal
-// y un MockBtrfsExecutor que registra llamadas.
+// y un MockBtrfsExecutor que registra llamadas. El scanner se devuelve
+// aparte para que los tests que necesitan controlar discos lo modifiquen.
 func setupTestService(t *testing.T) (*StorageService, *MockBtrfsExecutor, func()) {
 	t.Helper()
 
@@ -27,9 +28,25 @@ func setupTestService(t *testing.T) (*StorageService, *MockBtrfsExecutor, func()
 	repo := NewStorageRepo(conn)
 	policy := NewPolicyChecker()
 	mock := NewMockBtrfsExecutor()
-	service := NewStorageService(conn, repo, policy, mock)
+	scanner := NewMockDeviceScanner(nil) // sin discos por defecto
+	service := NewStorageService(conn, repo, policy, mock, scanner)
 
 	return service, mock, cleanupDB
+}
+
+// setupTestServiceWithScanner es como setupTestService pero también
+// devuelve el scanner para que tests de ScanDevices puedan configurarlo.
+func setupTestServiceWithScanner(t *testing.T) (*StorageService, *MockBtrfsExecutor, *MockDeviceScanner, func()) {
+	t.Helper()
+
+	conn, _, cleanupDB := setupTestDB(t)
+	repo := NewStorageRepo(conn)
+	policy := NewPolicyChecker()
+	mock := NewMockBtrfsExecutor()
+	scanner := NewMockDeviceScanner(nil)
+	service := NewStorageService(conn, repo, policy, mock, scanner)
+
+	return service, mock, scanner, cleanupDB
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,7 +81,7 @@ func TestStorageServiceListPoolsHydrated(t *testing.T) {
 		ID: poolID, Name: "data", BtrfsUUID: "u1",
 		Profile: ProfileRaid1, MountPoint: "/nimbus/pools/data",
 	})
-	err2 := service.repo.UpsertDevice(ctx, tx, &Device{
+	_, err2 := service.repo.UpsertDevice(ctx, tx, &Device{
 		ID: "d1", Serial: "S1", ByIDPath: "/dev/disk/by-id/s1",
 		CurrentPath: "/dev/sdb", SizeBytes: 1e12,
 	})

@@ -276,7 +276,7 @@ func TestStorageRepoDeviceUpsert(t *testing.T) {
 
 	// Insert nuevo
 	withTx(t, conn, func(tx *sql.Tx) error {
-		return repo.UpsertDevice(ctx, tx, dev)
+		_, err := repo.UpsertDevice(ctx, tx, dev); return err
 	})
 
 	got, err := repo.GetDeviceBySerial(ctx, "WD-WCC4N1234567")
@@ -300,7 +300,7 @@ func TestStorageRepoDeviceUpsert(t *testing.T) {
 		SizeBytes:   4000000000000,
 	}
 	withTx(t, conn, func(tx *sql.Tx) error {
-		return repo.UpsertDevice(ctx, tx, dev2)
+		_, err := repo.UpsertDevice(ctx, tx, dev2); return err
 	})
 
 	got, _ = repo.GetDeviceBySerial(ctx, "WD-WCC4N1234567")
@@ -317,7 +317,7 @@ func TestStorageRepoDeviceUpsert(t *testing.T) {
 		CurrentPath: "/dev/sdx",
 	}
 	tx, _ := conn.BeginTx(ctx, nil)
-	err = repo.UpsertDevice(ctx, tx, devBad)
+	_, err = repo.UpsertDevice(ctx, tx, devBad)
 	tx.Rollback()
 	if err == nil {
 		t.Fatal("Expected error for empty serial")
@@ -346,7 +346,7 @@ func TestStorageRepoListAvailableDevices(t *testing.T) {
 	}
 	for _, d := range devs {
 		withTx(t, conn, func(tx *sql.Tx) error {
-			return repo.UpsertDevice(ctx, tx, d)
+			_, err := repo.UpsertDevice(ctx, tx, d); return err
 		})
 	}
 
@@ -393,7 +393,7 @@ func TestStorageRepoFKCascadeOnPoolDelete(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		if err := repo.UpsertDevice(ctx, tx, &Device{
+		if _, err := repo.UpsertDevice(ctx, tx, &Device{
 			ID: "d1", Serial: "S1", ByIDPath: "/dev/disk/by-id/s1",
 			CurrentPath: "/dev/sda", SizeBytes: 1e12,
 		}); err != nil {
@@ -432,7 +432,7 @@ func TestStorageRepoFKRestrictOnDeviceDelete(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		if err := repo.UpsertDevice(ctx, tx, &Device{
+		if _, err := repo.UpsertDevice(ctx, tx, &Device{
 			ID: "d1", Serial: "S1", ByIDPath: "/dev/disk/by-id/s1",
 			CurrentPath: "/dev/sda", SizeBytes: 1e12,
 		}); err != nil {

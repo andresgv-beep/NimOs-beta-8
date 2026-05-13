@@ -33,19 +33,22 @@ import (
 // StorageService es la capa de orquestación. Recibe dependencias por
 // constructor para facilitar tests con mocks.
 type StorageService struct {
-	repo   *StorageRepo
-	policy *PolicyChecker
-	btrfs  BtrfsExecutor
-	db     *sql.DB // necesario para iniciar transacciones
+	repo    *StorageRepo
+	policy  *PolicyChecker
+	btrfs   BtrfsExecutor
+	scanner DeviceScanner
+	db      *sql.DB // necesario para iniciar transacciones
 }
 
 // NewStorageService crea el servicio con sus dependencias inyectadas.
-func NewStorageService(db *sql.DB, repo *StorageRepo, policy *PolicyChecker, btrfs BtrfsExecutor) *StorageService {
+func NewStorageService(db *sql.DB, repo *StorageRepo, policy *PolicyChecker,
+	btrfs BtrfsExecutor, scanner DeviceScanner) *StorageService {
 	return &StorageService{
-		repo:   repo,
-		policy: policy,
-		btrfs:  btrfs,
-		db:     db,
+		repo:    repo,
+		policy:  policy,
+		btrfs:   btrfs,
+		scanner: scanner,
+		db:      db,
 	}
 }
 
@@ -56,7 +59,8 @@ var storageService *StorageService
 // initStorageRepo() y initStoragePolicy().
 func initStorageService() {
 	executor := NewRealBtrfsExecutor()
-	storageService = NewStorageService(db, storageRepo, storagePolicy, executor)
+	scanner := NewLsblkDeviceScanner()
+	storageService = NewStorageService(db, storageRepo, storagePolicy, executor, scanner)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -553,4 +557,86 @@ func defaultIfEmpty(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ScanDevices — descubrir hardware y reconciliar con DB
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ScanResult resume el resultado de una ejecución de ScanDevices.
+type ScanResult struct {
+	Total    int // discos físicos vistos
+	Inserted int // discos nuevos registrados en DB
+	Updated  int // discos ya conocidos cuya info se actualizó
+	Skipped  int // discos descartados por no tener serial
+}
+
+// ScanDevices ejecuta el scanner y persiste los resultados en la DB.
+//
+// Comportamiento:
+//   - Cada disco visto por el scanner se hace UPSERT por serial (identidad absoluta)
+//   - Devices ya en DB cuyo current_path cambió se actualizan
+//   - Devices en DB que NO aparecen en el scan NO se borran (auditoría;
+//     se marcarán como "missing" por el reconciler de Fase 4)
+//   - Devices sin serial son rechazados (storage_invariants.md#3.3)
+//   - Devices sin by_id_path se loggean como warning pero se intentan persistir
+//     (por si en el siguiente scan udev los expone)
+//
+// Idempotente: se puede ejecutar muchas veces sin efectos secundarios.
+//
+// see docs/storage_state_machines.md §5 (Device lifecycle)
+func (s *StorageService) ScanDevices(ctx context.Context) (*ScanResult, error) {
+	scanned, err := s.scanner.ScanDevices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ScanDevices: scanner failed: %w", err)
+	}
+
+	result := &ScanResult{Total: len(scanned)}
+
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		for _, sd := range scanned {
+			if sd.Serial == "" {
+				// Defensive: el scanner ya filtra esto, pero confirmamos
+				result.Skipped++
+				continue
+			}
+
+			// Construir el Device (si by_id_path está vacío, usar device_path
+			// como fallback temporal; siguiente scan lo corregirá)
+			byIDPath := sd.ByIDPath
+			if byIDPath == "" {
+				byIDPath = sd.DevicePath
+				logMsg("ScanDevices: warning, %s has no by-id symlink yet", sd.Serial)
+			}
+
+			dev := &Device{
+				ID:          newUUID(), // se ignora si ya existe (UpsertDevice usa serial)
+				Serial:      sd.Serial,
+				ByIDPath:    byIDPath,
+				CurrentPath: sd.DevicePath,
+				WWN:         sd.WWN,
+				Model:       sd.Model,
+				SizeBytes:   sd.SizeBytes,
+			}
+
+			// UpsertDevice devuelve true si fue insert (nuevo), false si update.
+			wasInsert, err := s.repo.UpsertDevice(ctx, tx, dev)
+			if err != nil {
+				return fmt.Errorf("ScanDevices: upsert %s: %w", sd.Serial, err)
+			}
+			if wasInsert {
+				result.Inserted++
+			} else {
+				result.Updated++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	logMsg("ScanDevices: total=%d inserted=%d updated=%d skipped=%d",
+		result.Total, result.Inserted, result.Updated, result.Skipped)
+	return result, nil
 }
