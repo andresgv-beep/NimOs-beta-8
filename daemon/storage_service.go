@@ -640,3 +640,387 @@ func (s *StorageService) ScanDevices(ctx context.Context) (*ScanResult, error) {
 		result.Total, result.Inserted, result.Updated, result.Skipped)
 	return result, nil
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AddDevice — expandir un pool añadiendo un disco
+// ═════════════════════════════════════════════════════════════════════════════
+
+// AddDeviceRequest es el payload de AddDevice.
+type AddDeviceRequest struct {
+	PoolID    string `json:"pool_id"`
+	DeviceID  string `json:"device_id"`
+	WipeFirst bool   `json:"wipe_first,omitempty"`
+}
+
+// AddDevice añade un device a un pool BTRFS existente.
+// Genera Operation con type=add_device. Ejecuta inline en Beta 8
+// (el frontend hace polling vía la Operation).
+//
+// Pasos:
+//   1. Verificar policy (pool managed, capability add_device)
+//   2. Verificar que el device existe y NO está en otro pool
+//   3. Crear Operation con status in_progress
+//   4. Ejecutar btrfs device add
+//   5. Persistir la asignación en DB
+//   6. Marcar Operation completed (o failed con rollback)
+func (s *StorageService) AddDevice(ctx context.Context, req AddDeviceRequest) (*Operation, error) {
+	// ─── Validaciones ──────────────────────────────────────────────────
+	pool, err := s.GetPool(ctx, req.PoolID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.checkPolicy(pool, OpTypeAddDevice); err != nil {
+		return nil, err
+	}
+
+	device, err := s.repo.GetDevice(ctx, req.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if device == nil {
+		return nil, errFromCode(ErrCodeDeviceNotFound,
+			fmt.Sprintf("device %q not found", req.DeviceID))
+	}
+
+	inUse, err := s.deviceIsAssigned(ctx, device.ID)
+	if err != nil {
+		return nil, err
+	}
+	if inUse {
+		return nil, errFromCode(ErrCodeDeviceInUse,
+			fmt.Sprintf("device %q is already in a pool", device.ID))
+	}
+
+	// ─── Crear Operation ───────────────────────────────────────────────
+	op := &Operation{
+		ID:     newUUID(),
+		Type:   OpTypeAddDevice,
+		PoolID: &pool.ID,
+		Status: OpStatusInProgress,
+		Data: rawJSON(map[string]interface{}{
+			"device_id":   device.ID,
+			"device_serial": device.Serial,
+		}),
+	}
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.CreateOperation(ctx, tx, op)
+	})
+	if err != nil {
+		// Si esto falla por INV-1 (UNIQUE parcial), error útil al caller
+		return nil, errFromCode(ErrCodeOperationInProgress,
+			fmt.Sprintf("another layout operation is in progress on pool %s", pool.ID))
+	}
+
+	// ─── Wipe defensivo opcional ───────────────────────────────────────
+	if req.WipeFirst {
+		if err := s.btrfs.WipeDevice(ctx, device.ByIDPath); err != nil {
+			s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+			return s.repo.GetOperation(ctx, op.ID)
+		}
+	}
+
+	// ─── Ejecutar btrfs device add ─────────────────────────────────────
+	if err := s.btrfs.AddDevice(ctx, pool.MountPoint, device.ByIDPath); err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// ─── Persistir asignación ──────────────────────────────────────────
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.AssignDeviceToPool(ctx, tx, pool.ID, device.ID); err != nil {
+			return err
+		}
+		return s.repo.UpdateOperationStatus(ctx, tx, op.ID, OpStatusCompleted, nil, nil)
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeInternal)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	return s.repo.GetOperation(ctx, op.ID)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// RemoveDevice — quitar un disco del pool
+// ═════════════════════════════════════════════════════════════════════════════
+
+// RemoveDeviceRequest es el payload de RemoveDevice.
+type RemoveDeviceRequest struct {
+	PoolID   string `json:"pool_id"`
+	DeviceID string `json:"device_id"`
+}
+
+// RemoveDevice quita un device del pool. BTRFS hace balance implícito
+// (mueve datos del device a los demás). Operación pesada — puede tardar.
+//
+// Validaciones:
+//   - Pool managed, capability remove_device
+//   - Device pertenece al pool indicado
+//   - Tras quitar este device, el pool sigue teniendo >= MinDisks()
+//     para su profile (no degradar el profile)
+func (s *StorageService) RemoveDevice(ctx context.Context, req RemoveDeviceRequest) (*Operation, error) {
+	pool, err := s.GetPool(ctx, req.PoolID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.checkPolicy(pool, OpTypeRemoveDevice); err != nil {
+		return nil, err
+	}
+
+	// Buscar el device en este pool
+	var device *Device
+	for i := range pool.Devices {
+		if pool.Devices[i].ID == req.DeviceID {
+			device = &pool.Devices[i]
+			break
+		}
+	}
+	if device == nil {
+		return nil, errFromCode(ErrCodeDeviceNotFound,
+			fmt.Sprintf("device %q is not part of pool %s", req.DeviceID, pool.ID))
+	}
+
+	// No bajar del mínimo del profile
+	if len(pool.Devices)-1 < pool.Profile.MinDisks() {
+		return nil, errFromCode(ErrCodeMinDisksReached,
+			fmt.Sprintf("cannot remove device: profile %s requires at least %d disks",
+				pool.Profile, pool.Profile.MinDisks()))
+	}
+
+	// Operation
+	op := &Operation{
+		ID:     newUUID(),
+		Type:   OpTypeRemoveDevice,
+		PoolID: &pool.ID,
+		Status: OpStatusInProgress,
+		Data: rawJSON(map[string]interface{}{
+			"device_id":     device.ID,
+			"device_serial": device.Serial,
+		}),
+	}
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.CreateOperation(ctx, tx, op)
+	})
+	if err != nil {
+		return nil, errFromCode(ErrCodeOperationInProgress,
+			fmt.Sprintf("another layout operation is in progress on pool %s", pool.ID))
+	}
+
+	// Ejecutar btrfs device remove
+	if err := s.btrfs.RemoveDevice(ctx, pool.MountPoint, device.ByIDPath); err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// Persistir desasignación
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.UnassignDeviceFromPool(ctx, tx, pool.ID, device.ID); err != nil {
+			return err
+		}
+		return s.repo.UpdateOperationStatus(ctx, tx, op.ID, OpStatusCompleted, nil, nil)
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeInternal)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	return s.repo.GetOperation(ctx, op.ID)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ReplaceDevice — sustituir un disco por otro
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ReplaceDeviceRequest es el payload de ReplaceDevice.
+type ReplaceDeviceRequest struct {
+	PoolID      string `json:"pool_id"`
+	OldDeviceID string `json:"old_device_id"`
+	NewDeviceID string `json:"new_device_id"`
+}
+
+// ReplaceDevice sustituye un device dentro del pool por otro. Más eficiente
+// que remove+add porque btrfs replace start sincroniza desde los demás
+// miembros sin un balance completo.
+//
+// IMPORTANTE: el old device se hace wipefs SEGURO (no a ciegas).
+// see docs/storage_invariants.md#4.2
+func (s *StorageService) ReplaceDevice(ctx context.Context, req ReplaceDeviceRequest) (*Operation, error) {
+	pool, err := s.GetPool(ctx, req.PoolID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.checkPolicy(pool, OpTypeReplaceDevice); err != nil {
+		return nil, err
+	}
+
+	// Old debe estar en el pool
+	var oldDev *Device
+	for i := range pool.Devices {
+		if pool.Devices[i].ID == req.OldDeviceID {
+			oldDev = &pool.Devices[i]
+			break
+		}
+	}
+	if oldDev == nil {
+		return nil, errFromCode(ErrCodeDeviceNotFound,
+			fmt.Sprintf("old device %q is not part of pool %s", req.OldDeviceID, pool.ID))
+	}
+
+	// New debe existir y NO estar en otro pool
+	newDev, err := s.repo.GetDevice(ctx, req.NewDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if newDev == nil {
+		return nil, errFromCode(ErrCodeDeviceNotFound,
+			fmt.Sprintf("new device %q not found", req.NewDeviceID))
+	}
+	inUse, err := s.deviceIsAssigned(ctx, newDev.ID)
+	if err != nil {
+		return nil, err
+	}
+	if inUse {
+		return nil, errFromCode(ErrCodeDeviceInUse,
+			fmt.Sprintf("new device %q is already in a pool", newDev.ID))
+	}
+
+	// Validar tamaño del nuevo >= old (BTRFS no permite shrink implícito)
+	if newDev.SizeBytes < oldDev.SizeBytes {
+		return nil, errFromCode(ErrCodeDeviceNotEligible,
+			fmt.Sprintf("new device size (%d) < old device size (%d)",
+				newDev.SizeBytes, oldDev.SizeBytes))
+	}
+
+	op := &Operation{
+		ID:     newUUID(),
+		Type:   OpTypeReplaceDevice,
+		PoolID: &pool.ID,
+		Status: OpStatusInProgress,
+		Data: rawJSON(map[string]interface{}{
+			"old_device_id":     oldDev.ID,
+			"old_device_serial": oldDev.Serial,
+			"new_device_id":     newDev.ID,
+			"new_device_serial": newDev.Serial,
+		}),
+	}
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.CreateOperation(ctx, tx, op)
+	})
+	if err != nil {
+		return nil, errFromCode(ErrCodeOperationInProgress,
+			fmt.Sprintf("another layout operation is in progress on pool %s", pool.ID))
+	}
+
+	// Ejecutar btrfs replace (incluye wipefs seguro del old)
+	if err := s.btrfs.ReplaceDevice(ctx, pool.MountPoint, oldDev.ByIDPath, newDev.ByIDPath); err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// Swap atómico: desasignar old, asignar new
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.UnassignDeviceFromPool(ctx, tx, pool.ID, oldDev.ID); err != nil {
+			return err
+		}
+		if err := s.repo.AssignDeviceToPool(ctx, tx, pool.ID, newDev.ID); err != nil {
+			return err
+		}
+		return s.repo.UpdateOperationStatus(ctx, tx, op.ID, OpStatusCompleted, nil, nil)
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeInternal)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	return s.repo.GetOperation(ctx, op.ID)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ConvertProfile — cambiar el perfil de un pool
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ConvertProfileRequest es el payload de ConvertProfile.
+type ConvertProfileRequest struct {
+	PoolID     string  `json:"pool_id"`
+	NewProfile Profile `json:"new_profile"`
+}
+
+// ConvertProfile cambia el perfil de un pool (ej: single → raid1, raid1 → raid10).
+// Operación pesada (mueve datos). Validaciones:
+//   - Pool managed, capability convert_profile
+//   - El profile destino es válido y compatible con número de discos actual
+//   - El profile destino es DIFERENTE al actual
+func (s *StorageService) ConvertProfile(ctx context.Context, req ConvertProfileRequest) (*Operation, error) {
+	pool, err := s.GetPool(ctx, req.PoolID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.checkPolicy(pool, OpTypeConvertProfile); err != nil {
+		return nil, err
+	}
+
+	if !req.NewProfile.IsValid() {
+		return nil, errFromCode(ErrCodeProfileInvalid,
+			fmt.Sprintf("invalid profile %q", req.NewProfile))
+	}
+	if req.NewProfile == pool.Profile {
+		return nil, errFromCode(ErrCodeBadRequest,
+			fmt.Sprintf("pool is already in profile %q", req.NewProfile))
+	}
+	if len(pool.Devices) < req.NewProfile.MinDisks() {
+		return nil, errFromCode(ErrCodeInsufficientDisks,
+			fmt.Sprintf("profile %s requires at least %d disks, pool has %d",
+				req.NewProfile, req.NewProfile.MinDisks(), len(pool.Devices)))
+	}
+
+	op := &Operation{
+		ID:     newUUID(),
+		Type:   OpTypeConvertProfile,
+		PoolID: &pool.ID,
+		Status: OpStatusInProgress,
+		Data: rawJSON(map[string]interface{}{
+			"from_profile": string(pool.Profile),
+			"to_profile":   string(req.NewProfile),
+		}),
+	}
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.CreateOperation(ctx, tx, op)
+	})
+	if err != nil {
+		return nil, errFromCode(ErrCodeOperationInProgress,
+			fmt.Sprintf("another layout operation is in progress on pool %s", pool.ID))
+	}
+
+	// Ejecutar btrfs balance con conversión
+	if err := s.btrfs.ConvertProfile(ctx, pool.MountPoint, req.NewProfile); err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// Persistir el nuevo profile en la DB
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		// El profile no tiene un setter dedicado en el repo (los profiles
+		// no son una columna que se cambia desde UI normalmente). Lo hago
+		// vía UPDATE directo dentro de la tx para mantener atomicidad.
+		_, e := tx.ExecContext(ctx,
+			`UPDATE storage_pools SET profile = ?, generation = generation + 1 WHERE id = ?`,
+			string(req.NewProfile), pool.ID)
+		if e != nil {
+			return fmt.Errorf("update profile: %w", e)
+		}
+		if _, e := s.repo.incrementGlobalGeneration(ctx, tx); e != nil {
+			return e
+		}
+		return s.repo.UpdateOperationStatus(ctx, tx, op.ID, OpStatusCompleted, nil, nil)
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeInternal)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	return s.repo.GetOperation(ctx, op.ID)
+}

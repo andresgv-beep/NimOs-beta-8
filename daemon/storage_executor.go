@@ -52,6 +52,11 @@ type BtrfsExecutor interface {
 	// see docs/storage_invariants.md#4.2
 	ReplaceDevice(ctx context.Context, mountPoint, oldByIDPath, newByIDPath string) error
 
+	// ConvertProfile cambia el perfil de datos/metadata del pool
+	// (ej: single → raid1, raid1 → raid10). Internamente ejecuta
+	// btrfs balance start con el filtro de profile. Operación pesada.
+	ConvertProfile(ctx context.Context, mountPoint string, newProfile Profile) error
+
 	// WipeDevice borra firmas de filesystem y particiones del device.
 	// Verifica defensivamente que el device no es boot disk ni está
 	// montado. Devuelve error si no es seguro hacerlo.

@@ -21,6 +21,11 @@ import (
 // Helper: registrar devices en la DB para usar en CreatePool
 // ─────────────────────────────────────────────────────────────────────────────
 
+// testDeviceCounter genera IDs únicos para test devices.
+// Cada llamada a registerTestDevices reserva un bloque de IDs nuevo,
+// permitiendo crear múltiples pools en el mismo test sin colisiones.
+var testDeviceCounter int
+
 func registerTestDevices(t *testing.T, service *StorageService, count int) []string {
 	t.Helper()
 	ctx := context.Background()
@@ -28,12 +33,13 @@ func registerTestDevices(t *testing.T, service *StorageService, count int) []str
 
 	tx, _ := service.db.BeginTx(ctx, nil)
 	for i := 0; i < count; i++ {
-		id := fmt.Sprintf("dev-%d", i+1)
+		testDeviceCounter++
+		id := fmt.Sprintf("dev-%d", testDeviceCounter)
 		_, err := service.repo.UpsertDevice(ctx, tx, &Device{
 			ID:          id,
-			Serial:      fmt.Sprintf("TEST-SERIAL-%d", i+1),
-			ByIDPath:    fmt.Sprintf("/dev/disk/by-id/test-%d", i+1),
-			CurrentPath: fmt.Sprintf("/dev/loop%d", i+1),
+			Serial:      fmt.Sprintf("TEST-SERIAL-%d", testDeviceCounter),
+			ByIDPath:    fmt.Sprintf("/dev/disk/by-id/test-%d", testDeviceCounter),
+			CurrentPath: fmt.Sprintf("/dev/loop%d", testDeviceCounter),
 			SizeBytes:   1e12,
 		})
 		if err != nil {

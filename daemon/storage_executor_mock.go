@@ -39,6 +39,7 @@ type MockBtrfsExecutor struct {
 	AddDeviceFn         func(ctx context.Context, mountPoint, byIDPath string) error
 	RemoveDeviceFn      func(ctx context.Context, mountPoint, byIDPath string) error
 	ReplaceDeviceFn     func(ctx context.Context, mountPoint, oldByIDPath, newByIDPath string) error
+	ConvertProfileFn    func(ctx context.Context, mountPoint string, newProfile Profile) error
 	WipeDeviceFn        func(ctx context.Context, byIDPath string) error
 	GetFilesystemInfoFn func(ctx context.Context, mountPoint string) (*FilesystemInfo, error)
 
@@ -51,6 +52,7 @@ type MockBtrfsExecutor struct {
 	AddDeviceCalls         []MockDeviceCall
 	RemoveDeviceCalls      []MockDeviceCall
 	ReplaceDeviceCalls     []MockReplaceCall
+	ConvertProfileCalls    []MockConvertProfileCall
 	WipeDeviceCalls        []string // by-id paths
 	GetFilesystemInfoCalls []string // mount points
 }
@@ -72,6 +74,12 @@ type MockReplaceCall struct {
 	MountPoint    string
 	OldByIDPath   string
 	NewByIDPath   string
+}
+
+// MockConvertProfileCall captura los argumentos de ConvertProfile.
+type MockConvertProfileCall struct {
+	MountPoint string
+	NewProfile Profile
 }
 
 // NewMockBtrfsExecutor crea un mock con todas las funciones a nil
@@ -189,6 +197,20 @@ func (m *MockBtrfsExecutor) ReplaceDevice(ctx context.Context, mountPoint, oldBy
 	return nil
 }
 
+func (m *MockBtrfsExecutor) ConvertProfile(ctx context.Context, mountPoint string, newProfile Profile) error {
+	m.mu.Lock()
+	m.ConvertProfileCalls = append(m.ConvertProfileCalls, MockConvertProfileCall{
+		MountPoint: mountPoint, NewProfile: newProfile,
+	})
+	fn := m.ConvertProfileFn
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, mountPoint, newProfile)
+	}
+	return nil
+}
+
 func (m *MockBtrfsExecutor) WipeDevice(ctx context.Context, byIDPath string) error {
 	m.mu.Lock()
 	m.WipeDeviceCalls = append(m.WipeDeviceCalls, byIDPath)
@@ -225,6 +247,7 @@ func (m *MockBtrfsExecutor) Reset() {
 	m.AddDeviceCalls = nil
 	m.RemoveDeviceCalls = nil
 	m.ReplaceDeviceCalls = nil
+	m.ConvertProfileCalls = nil
 	m.WipeDeviceCalls = nil
 	m.GetFilesystemInfoCalls = nil
 }

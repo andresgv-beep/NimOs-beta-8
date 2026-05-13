@@ -249,6 +249,32 @@ func (e *RealBtrfsExecutor) ReplaceDevice(ctx context.Context, mountPoint, oldBy
 	return nil
 }
 
+// ConvertProfile cambia el profile de un pool ejecutando btrfs balance
+// con filtros de profile. El comando bloquea hasta que termina (operación
+// pesada que puede tardar minutos/horas).
+func (e *RealBtrfsExecutor) ConvertProfile(ctx context.Context, mountPoint string, newProfile Profile) error {
+	if !newProfile.IsValid() {
+		return fmt.Errorf("ConvertProfile: invalid profile %q", newProfile)
+	}
+
+	profileStr := string(newProfile)
+	// btrfs balance start -dconvert=raid1 -mconvert=raid1 <mountpoint>
+	// Convertimos data Y metadata para mantener consistencia.
+	args := []string{
+		"balance", "start",
+		"-dconvert=" + profileStr,
+		"-mconvert=" + profileStr,
+		"--full-balance",
+		mountPoint,
+	}
+
+	_, err := e.runCommand(ctx, "btrfs", args...)
+	if err != nil {
+		return fmt.Errorf("ConvertProfile: %w", err)
+	}
+	return nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WipeDevice — con guards defensivos
 // ─────────────────────────────────────────────────────────────────────────────
