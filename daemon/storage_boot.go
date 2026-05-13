@@ -40,6 +40,7 @@ func initStorageModule() error {
 	// Crear singletons globales.
 	initStorageRepo()
 	initStoragePolicy()
+	initStorageService()
 
 	// Verificación defensiva: leer global_generation. Si esto falla,
 	// algo está mal con la conexión o con el schema.

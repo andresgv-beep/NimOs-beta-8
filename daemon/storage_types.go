@@ -12,7 +12,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,3 +321,25 @@ const (
 	ErrCodeBadRequest            = "bad_request"
 	ErrCodeInternal              = "internal"
 )
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers compartidos del módulo
+// ─────────────────────────────────────────────────────────────────────────────
+
+// newUUID devuelve un UUID v4 para usar como ID de entidades.
+// Wrapper sobre google/uuid para no esparcir el import por todo el código.
+func newUUID() string {
+	return uuid.NewString()
+}
+
+// rawJSON serializa cualquier valor a json.RawMessage. Si la serialización
+// falla (raro con tipos simples), devuelve un JSON con error legible.
+// Usado para el campo Operation.Data.
+func rawJSON(v interface{}) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// Fallback: nunca devolver Data inválido
+		return json.RawMessage(fmt.Sprintf(`{"_error":"marshal failed: %s"}`, err))
+	}
+	return json.RawMessage(b)
+}
