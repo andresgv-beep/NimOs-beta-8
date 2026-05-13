@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 )
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -34,15 +35,16 @@ import (
 type StorageService struct {
 	repo   *StorageRepo
 	policy *PolicyChecker
+	btrfs  BtrfsExecutor
 	db     *sql.DB // necesario para iniciar transacciones
-	// btrfs BtrfsExecutor — se añadirá en Bloque 2
 }
 
 // NewStorageService crea el servicio con sus dependencias inyectadas.
-func NewStorageService(db *sql.DB, repo *StorageRepo, policy *PolicyChecker) *StorageService {
+func NewStorageService(db *sql.DB, repo *StorageRepo, policy *PolicyChecker, btrfs BtrfsExecutor) *StorageService {
 	return &StorageService{
 		repo:   repo,
 		policy: policy,
+		btrfs:  btrfs,
 		db:     db,
 	}
 }
@@ -53,7 +55,8 @@ var storageService *StorageService
 // initStorageService crea la instancia global. Llamar tras
 // initStorageRepo() y initStoragePolicy().
 func initStorageService() {
-	storageService = NewStorageService(db, storageRepo, storagePolicy)
+	executor := NewRealBtrfsExecutor()
+	storageService = NewStorageService(db, storageRepo, storagePolicy, executor)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -303,20 +306,251 @@ func (s *StorageService) SetPoolCompression(ctx context.Context, id, algorithm s
 
 // CreatePoolRequest es el payload de CreatePool.
 type CreatePoolRequest struct {
-	Name      string   `json:"name"`
-	Profile   Profile  `json:"profile"`
-	DeviceIDs []string `json:"device_ids"` // serials o IDs internos
+	Name        string   `json:"name"`
+	Profile     Profile  `json:"profile"`
+	DeviceIDs   []string `json:"device_ids"` // IDs internos de devices ya registrados
+	Compression string   `json:"compression,omitempty"`
+	WipeFirst   bool     `json:"wipe_first,omitempty"`
 }
 
 // CreatePool crea un nuevo pool BTRFS con los devices indicados.
-// Asíncrona. Genera Operation con status=pending → in_progress → completed/failed.
-// IMPLEMENTACIÓN PENDIENTE — Bloque 2.
+// Asíncrona conceptualmente (genera Operation) pero ejecuta inline en
+// Beta 8. El frontend hace polling vía la Operation.
+//
+// Pasos:
+//   1. Validar request (name único, devices existen y están libres, profile válido)
+//   2. Crear Operation con status in_progress
+//   3. Ejecutar btrfs (mkfs, mount, identity file)
+//   4. Persistir pool + assignments + capabilities en DB
+//   5. Marcar Operation completed (o failed con rollback)
+//   6. Devolver la Operation
 func (s *StorageService) CreatePool(ctx context.Context, req CreatePoolRequest) (*Operation, error) {
-	return nil, errFromCode(ErrCodeInternal, "CreatePool: not yet implemented (Bloque 2)")
+	// ─── Validación previa (antes de tocar nada) ───────────────────────
+	if req.Name == "" {
+		return nil, errFromCode(ErrCodeBadRequest, "pool name is required")
+	}
+	if !req.Profile.IsValid() {
+		return nil, errFromCode(ErrCodeProfileInvalid,
+			fmt.Sprintf("invalid profile %q", req.Profile))
+	}
+	if len(req.DeviceIDs) < req.Profile.MinDisks() {
+		return nil, errFromCode(ErrCodeInsufficientDisks,
+			fmt.Sprintf("profile %s requires at least %d disks, got %d",
+				req.Profile, req.Profile.MinDisks(), len(req.DeviceIDs)))
+	}
+
+	// ¿Nombre ya tomado?
+	existing, err := s.repo.GetPoolByName(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, errFromCode(ErrCodePoolNameTaken,
+			fmt.Sprintf("pool name %q already in use", req.Name))
+	}
+
+	// ¿Devices existen y están libres?
+	devices := make([]*Device, 0, len(req.DeviceIDs))
+	for _, id := range req.DeviceIDs {
+		d, err := s.repo.GetDevice(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if d == nil {
+			return nil, errFromCode(ErrCodeDeviceNotFound,
+				fmt.Sprintf("device %q not found", id))
+		}
+		// ¿Ya está en un pool?
+		inPool, err := s.deviceIsAssigned(ctx, d.ID)
+		if err != nil {
+			return nil, err
+		}
+		if inPool {
+			return nil, errFromCode(ErrCodeDeviceInUse,
+				fmt.Sprintf("device %q is already in a pool", d.ID))
+		}
+		devices = append(devices, d)
+	}
+
+	// ─── Crear Operation con status in_progress ────────────────────────
+	op := &Operation{
+		ID:     newUUID(),
+		Type:   OpTypeCreatePool,
+		Status: OpStatusInProgress,
+		Data: rawJSON(map[string]interface{}{
+			"name":       req.Name,
+			"profile":    string(req.Profile),
+			"device_ids": req.DeviceIDs,
+		}),
+	}
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.CreateOperation(ctx, tx, op)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// ─── Ejecutar BTRFS ────────────────────────────────────────────────
+	byIDPaths := make([]string, len(devices))
+	for i, d := range devices {
+		byIDPaths[i] = d.ByIDPath
+	}
+
+	fsInfo, err := s.btrfs.CreateFilesystem(ctx, CreateFilesystemRequest{
+		Label:     req.Name,
+		Profile:   req.Profile,
+		ByIDPaths: byIDPaths,
+		WipeFirst: req.WipeFirst,
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// Montar
+	mountPoint := filepath.Join("/nimbus/pools", req.Name)
+	if err := s.btrfs.MountFilesystem(ctx, byIDPaths[0], mountPoint); err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeMountFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// ─── Persistir en DB (pool + devices + capabilities) ───────────────
+	poolID := newUUID()
+	pool := &Pool{
+		ID:           poolID,
+		Name:         req.Name,
+		BtrfsUUID:    fsInfo.BtrfsUUID,
+		Profile:      req.Profile,
+		MountPoint:   mountPoint,
+		Role:         RoleData,
+		ControlState: ControlStateManaged,
+		Compression:  defaultIfEmpty(req.Compression, "none"),
+	}
+
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.CreatePool(ctx, tx, pool); err != nil {
+			return err
+		}
+		for _, d := range devices {
+			if err := s.repo.AssignDeviceToPool(ctx, tx, poolID, d.ID); err != nil {
+				return err
+			}
+		}
+		if err := s.repo.SetPoolCapabilities(ctx, tx, poolID,
+			DefaultBtrfsManagedCapabilities()); err != nil {
+			return err
+		}
+		// Actualizar la operation con el pool_id ahora que lo conocemos
+		op.PoolID = &poolID
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE storage_operations SET pool_id = ? WHERE id = ?`,
+			poolID, op.ID); err != nil {
+			return err
+		}
+		return s.repo.UpdateOperationStatus(ctx, tx, op.ID, OpStatusCompleted, nil, nil)
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeInternal)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	return s.repo.GetOperation(ctx, op.ID)
 }
 
 // DestroyPool destruye un pool BTRFS y libera sus devices.
-// IMPLEMENTACIÓN PENDIENTE — Bloque 2.
+// Asíncrona conceptualmente; ejecuta inline en Beta 8.
 func (s *StorageService) DestroyPool(ctx context.Context, poolID string) (*Operation, error) {
-	return nil, errFromCode(ErrCodeInternal, "DestroyPool: not yet implemented (Bloque 2)")
+	pool, err := s.GetPool(ctx, poolID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.checkPolicy(pool, OpTypeDestroyPool); err != nil {
+		return nil, err
+	}
+
+	// Crear operation
+	op := &Operation{
+		ID:     newUUID(),
+		Type:   OpTypeDestroyPool,
+		PoolID: &pool.ID,
+		Status: OpStatusInProgress,
+		Data: rawJSON(map[string]interface{}{
+			"name":       pool.Name,
+			"btrfs_uuid": pool.BtrfsUUID,
+		}),
+	}
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.CreateOperation(ctx, tx, op)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Recolectar by-id paths antes de borrar nada
+	byIDPaths := make([]string, len(pool.Devices))
+	for i, d := range pool.Devices {
+		byIDPaths[i] = d.ByIDPath
+	}
+
+	// Ejecutar destroy físico
+	err = s.btrfs.DestroyFilesystem(ctx, DestroyFilesystemRequest{
+		MountPoint: pool.MountPoint,
+		ByIDPaths:  byIDPaths,
+		Force:      false,
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeBtrfsCommandFailed)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	// Borrar pool de DB (CASCADE limpia pool_devices, capabilities;
+	// SET NULL preserva las operations en histórico)
+	err = s.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := s.repo.DeletePool(ctx, tx, pool.ID); err != nil {
+			return err
+		}
+		return s.repo.UpdateOperationStatus(ctx, tx, op.ID, OpStatusCompleted, nil, nil)
+	})
+	if err != nil {
+		s.markOperationFailed(ctx, op.ID, err.Error(), ErrCodeInternal)
+		return s.repo.GetOperation(ctx, op.ID)
+	}
+
+	return s.repo.GetOperation(ctx, op.ID)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers privados de mutaciones async
+// ─────────────────────────────────────────────────────────────────────────────
+
+// markOperationFailed actualiza la operation a failed con el código dado.
+// Best-effort: si la actualización falla, lo loggea pero no propaga.
+func (s *StorageService) markOperationFailed(ctx context.Context, opID, errMsg, errCode string) {
+	err := s.runInTx(ctx, func(tx *sql.Tx) error {
+		return s.repo.UpdateOperationStatus(ctx, tx, opID, OpStatusFailed, &errMsg, &errCode)
+	})
+	if err != nil {
+		logMsg("markOperationFailed: cannot update op %s: %v", opID, err)
+	}
+}
+
+// deviceIsAssigned devuelve true si el device está asignado a algún pool.
+func (s *StorageService) deviceIsAssigned(ctx context.Context, deviceID string) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM storage_pool_devices WHERE device_id = ?`,
+		deviceID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("deviceIsAssigned: %w", err)
+	}
+	return count > 0, nil
+}
+
+// defaultIfEmpty devuelve fallback si s es "".
+func defaultIfEmpty(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }

@@ -18,16 +18,18 @@ import (
 	"testing"
 )
 
-// setupTestService crea un StorageService apoyado en una DB SQLite temporal.
-func setupTestService(t *testing.T) (*StorageService, func()) {
+// setupTestService crea un StorageService apoyado en una DB SQLite temporal
+// y un MockBtrfsExecutor que registra llamadas.
+func setupTestService(t *testing.T) (*StorageService, *MockBtrfsExecutor, func()) {
 	t.Helper()
 
 	conn, _, cleanupDB := setupTestDB(t)
 	repo := NewStorageRepo(conn)
 	policy := NewPolicyChecker()
-	service := NewStorageService(conn, repo, policy)
+	mock := NewMockBtrfsExecutor()
+	service := NewStorageService(conn, repo, policy, mock)
 
-	return service, cleanupDB
+	return service, mock, cleanupDB
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ func setupTestService(t *testing.T) (*StorageService, func()) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestStorageServiceListPoolsEmpty(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 
 	pools, err := service.ListPools(context.Background())
@@ -48,7 +50,7 @@ func TestStorageServiceListPoolsEmpty(t *testing.T) {
 }
 
 func TestStorageServiceListPoolsHydrated(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -94,7 +96,7 @@ func TestStorageServiceListPoolsHydrated(t *testing.T) {
 }
 
 func TestStorageServiceGetPoolNotFound(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 
 	_, err := service.GetPool(context.Background(), "nonexistent")
@@ -111,7 +113,7 @@ func TestStorageServiceGetPoolNotFound(t *testing.T) {
 }
 
 func TestStorageServiceGetGeneration(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -142,7 +144,7 @@ func TestStorageServiceGetGeneration(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestStorageServiceRenamePoolHappy(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -180,7 +182,7 @@ func TestStorageServiceRenamePoolHappy(t *testing.T) {
 }
 
 func TestStorageServiceRenamePoolNotFound(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 
 	_, err := service.RenamePool(context.Background(), "nonexistent", "whatever")
@@ -194,7 +196,7 @@ func TestStorageServiceRenamePoolNotFound(t *testing.T) {
 }
 
 func TestStorageServiceRenamePoolObservedRejected(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -218,7 +220,7 @@ func TestStorageServiceRenamePoolObservedRejected(t *testing.T) {
 }
 
 func TestStorageServiceRenamePoolNameTaken(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -249,7 +251,7 @@ func TestStorageServiceRenamePoolNameTaken(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestStorageServiceSetCompressionHappy(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -277,7 +279,7 @@ func TestStorageServiceSetCompressionHappy(t *testing.T) {
 }
 
 func TestStorageServiceSetCompressionRequiresCapability(t *testing.T) {
-	service, cleanup := setupTestService(t)
+	service, _, cleanup := setupTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -296,26 +298,6 @@ func TestStorageServiceSetCompressionRequiresCapability(t *testing.T) {
 	var se *ServiceError
 	if !errors.As(err, &se) || se.Code != ErrCodeCapabilityMissing {
 		t.Errorf("expected capability_missing, got %v", err)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Stubs que aún no están implementados
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestStorageServiceCreatePoolNotImplemented(t *testing.T) {
-	service, cleanup := setupTestService(t)
-	defer cleanup()
-
-	_, err := service.CreatePool(context.Background(), CreatePoolRequest{
-		Name: "test", Profile: ProfileRaid1, DeviceIDs: []string{"d1", "d2"},
-	})
-	if err == nil {
-		t.Fatal("expected not-implemented error")
-	}
-	var se *ServiceError
-	if !errors.As(err, &se) || se.Code != ErrCodeInternal {
-		t.Errorf("expected internal error, got %v", err)
 	}
 }
 
