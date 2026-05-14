@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,10 @@ import (
 func setupTestDB(t *testing.T) (*sql.DB, *StorageRepo, func()) {
 	t.Helper()
 
-	tmpDB := "/tmp/nimos_repo_test_" + t.Name() + ".db"
+	// Sanitizar el nombre: los subtests t.Run incluyen "/" que rompe el path.
+	// Sustituimos cualquier carácter problemático por "_".
+	safeName := strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name())
+	tmpDB := "/tmp/nimos_repo_test_" + safeName + ".db"
 	os.Remove(tmpDB)
 
 	conn, err := sql.Open("sqlite", tmpDB+"?_journal_mode=WAL&_busy_timeout=10000")

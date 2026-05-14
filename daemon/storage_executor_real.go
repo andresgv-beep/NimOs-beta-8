@@ -436,3 +436,41 @@ func (e *RealBtrfsExecutor) GetFilesystemInfo(ctx context.Context, mountPoint st
 	// see docs/nimos_beta8_storage_plan.md fase 3 día 6
 	return &FilesystemInfo{}, nil
 }
+
+// FilesystemExistsByUUID consulta `btrfs filesystem show` para ver si
+// el kernel conoce un filesystem con el UUID dado. No requiere que esté
+// montado.
+//
+// Comando: btrfs filesystem show <uuid>
+// - exit 0: existe → devolvemos true
+// - exit != 0: no existe (o no se pudo determinar) → false
+//
+// Si btrfs filesystem show falla por motivos distintos a "no existe"
+// (kernel sin btrfs, permisos), devolvemos error explícito en lugar de
+// false silencioso. El caller (recovery) debe decidir qué hacer ante
+// incertidumbre.
+func (e *RealBtrfsExecutor) FilesystemExistsByUUID(ctx context.Context, btrfsUUID string) (bool, error) {
+	if btrfsUUID == "" {
+		return false, fmt.Errorf("FilesystemExistsByUUID: empty UUID")
+	}
+
+	// Antes de consultar, hacemos un device scan para que el kernel
+	// conozca los filesystems disponibles aunque no estén montados.
+	_, _ = e.runCommand(ctx, "btrfs", "device", "scan")
+
+	cmd := exec.CommandContext(ctx, "btrfs", "filesystem", "show", btrfsUUID)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+
+	// Exit code != 0 con mensaje "No filesystem found" → no existe
+	outStr := strings.ToLower(string(output))
+	if strings.Contains(outStr, "no filesystem found") ||
+		strings.Contains(outStr, "not a btrfs filesystem") {
+		return false, nil
+	}
+
+	// Cualquier otro error: propagamos. El caller decide.
+	return false, fmt.Errorf("FilesystemExistsByUUID: %v: %s", err, strings.TrimSpace(string(output)))
+}

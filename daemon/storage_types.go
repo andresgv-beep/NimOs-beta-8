@@ -320,6 +320,16 @@ const (
 	ErrCodeCrashedDuringOperation = "crashed_during_operation"
 	ErrCodeBadRequest            = "bad_request"
 	ErrCodeInternal              = "internal"
+
+	// ─── Recovery (Fase 4) ───────────────────────────────────────────────
+	// Se aplica a operations marcadas failed por el recovery al arranque,
+	// cuando no se puede determinar con certeza si la op se completó o no.
+	// El usuario debe revisar manualmente.
+	ErrCodeRecoveryInconclusive = "recovery_inconclusive"
+	// La op estaba in_progress cuando el daemon murió, BTRFS confirma que
+	// el efecto deseado NO se aplicó (filesystem no existe, device no
+	// añadido, etc.). Marcada failed sin ambigüedad.
+	ErrCodeRecoveryRolledBack = "recovery_rolled_back"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

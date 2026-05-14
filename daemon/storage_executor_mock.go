@@ -42,6 +42,7 @@ type MockBtrfsExecutor struct {
 	ConvertProfileFn    func(ctx context.Context, mountPoint string, newProfile Profile) error
 	WipeDeviceFn        func(ctx context.Context, byIDPath string) error
 	GetFilesystemInfoFn func(ctx context.Context, mountPoint string) (*FilesystemInfo, error)
+	FilesystemExistsByUUIDFn func(ctx context.Context, btrfsUUID string) (bool, error)
 
 	// Registros de llamadas. Los tests inspeccionan estas listas para
 	// verificar que el SUT (System Under Test) hizo lo correcto.
@@ -55,6 +56,7 @@ type MockBtrfsExecutor struct {
 	ConvertProfileCalls    []MockConvertProfileCall
 	WipeDeviceCalls        []string // by-id paths
 	GetFilesystemInfoCalls []string // mount points
+	FilesystemExistsByUUIDCalls []string // UUIDs consultados
 }
 
 // MockMountCall captura los argumentos de MountFilesystem.
@@ -235,6 +237,19 @@ func (m *MockBtrfsExecutor) GetFilesystemInfo(ctx context.Context, mountPoint st
 	return &FilesystemInfo{}, nil
 }
 
+func (m *MockBtrfsExecutor) FilesystemExistsByUUID(ctx context.Context, btrfsUUID string) (bool, error) {
+	m.mu.Lock()
+	m.FilesystemExistsByUUIDCalls = append(m.FilesystemExistsByUUIDCalls, btrfsUUID)
+	fn := m.FilesystemExistsByUUIDFn
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, btrfsUUID)
+	}
+	// Default: false (más seguro asumir que no existe en recovery)
+	return false, nil
+}
+
 // Reset limpia todos los registros de llamadas. Útil para tests que
 // reutilizan el mismo mock entre fases.
 func (m *MockBtrfsExecutor) Reset() {
@@ -250,4 +265,5 @@ func (m *MockBtrfsExecutor) Reset() {
 	m.ConvertProfileCalls = nil
 	m.WipeDeviceCalls = nil
 	m.GetFilesystemInfoCalls = nil
+	m.FilesystemExistsByUUIDCalls = nil
 }

@@ -65,6 +65,12 @@ type BtrfsExecutor interface {
 	// GetFilesystemInfo consulta BTRFS para devolver el estado actual
 	// del filesystem (UUID, devices presentes, total/used bytes).
 	GetFilesystemInfo(ctx context.Context, mountPoint string) (*FilesystemInfo, error)
+
+	// FilesystemExistsByUUID comprueba si BTRFS conoce un filesystem con
+	// el UUID dado, sin necesidad de tenerlo montado. Útil en recovery
+	// para verificar si un pool persiste en disco tras un crash.
+	// see docs/storage_state_machines.md §4 (recovery)
+	FilesystemExistsByUUID(ctx context.Context, btrfsUUID string) (bool, error)
 }
 
 // CreateFilesystemRequest es el payload de CreateFilesystem.
