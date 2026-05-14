@@ -134,8 +134,9 @@ func TestStorageHTTPListPoolsMethodNotAllowed(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status: got %d, want 405", rec.Code)
 	}
-	if rec.Header().Get("Allow") != "GET" {
-		t.Errorf("Allow header: got %q, want GET", rec.Header().Get("Allow"))
+	// El handler ahora acepta GET y POST
+	if got := rec.Header().Get("Allow"); got != "GET, POST" {
+		t.Errorf("Allow header: got %q, want %q", got, "GET, POST")
 	}
 }
 
@@ -194,16 +195,17 @@ func TestStorageHTTPGetPoolMissingIDInPath(t *testing.T) {
 	}
 }
 
-func TestStorageHTTPGetPoolSubresourceRejected(t *testing.T) {
-	// En Bloque 3 los subrecursos no están soportados todavía
+func TestStorageHTTPGetPoolSubresourceWithGETRejected(t *testing.T) {
+	// /pools/{id}/devices con GET no está permitido (devices es POST add)
+	// → debe devolver 405 method not allowed, no 400
 	handler, _, _, cleanup := setupTestHTTP(t)
 	defer cleanup()
 
 	rec := doRequest(handler.handlePoolByID, "GET",
 		"/api/storage/v2/pools/p1/devices", "")
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400 (subresource not supported)", rec.Code)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status: got %d, want 405", rec.Code)
 	}
 }
 
