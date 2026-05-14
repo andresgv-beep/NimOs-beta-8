@@ -16,7 +16,7 @@ const nimbusPoolsDir = "/nimbus/pools"
 // ─── Global vars ─────────────────────────────────────────────────────────────
 
 var hasBtrfs bool
-// hasZfs is declared in hardware.go
+// Beta 8: ZFS support removed. Only BTRFS is supported.
 var storageAlertsGo []map[string]interface{}
 
 // LOGIC-001/002: Mutex for storage.json read/write and storageAlertsGo
@@ -79,10 +79,9 @@ func getStoragePoolsGo() []map[string]interface{} {
 		}
 		poolType, _ := poolConf["type"].(string)
 		switch poolType {
-		case "zfs":
-			pools = append(pools, getZfsPoolInfo(poolConf, primaryPool))
-		case "btrfs":
+		case "btrfs", "":
 			pools = append(pools, getBtrfsPoolInfo(poolConf, primaryPool))
+			// Beta 8: ZFS pools en la config se ignoran silenciosamente.
 		}
 	}
 	if pools == nil {

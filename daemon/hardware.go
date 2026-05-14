@@ -26,7 +26,6 @@ var (
 	hasDocker   bool
 	hasNvidia   bool
 	hasAmdDrm   bool
-	hasZfs      bool
 	systemArch  string
 	systemRamGB int
 )
@@ -45,19 +44,7 @@ func detectHardwareTools() {
 	_, hasNvidia = runSafe("which", "nvidia-smi")
 	hasAmdDrm = detectAmdDrm()
 
-	// Storage backends
-	if zpoolOut, ok := runSafe("which", "zpool"); ok && zpoolOut != "" {
-		// Verify ZFS module is loaded
-		if _, modOk := runShellStatic("lsmod 2>/dev/null | grep -q '^zfs '"); modOk {
-			hasZfs = true
-		} else {
-			// Try loading it
-			runSafe("modprobe", "zfs")
-			_, hasZfs = runShellStatic("lsmod 2>/dev/null | grep -q '^zfs '")
-		}
-	}
-
-	// Btrfs detection
+	// Beta 8: ZFS no longer supported. Only BTRFS is detected.
 	detectBtrfs()
 
 	// System info
@@ -67,12 +54,10 @@ func detectHardwareTools() {
 		systemRamGB = parseIntDefault(strings.TrimSpace(memInfo), 0)
 	}
 
-	if hasZfs {
-		logMsg("ZFS available (arch=%s, ram=%dGB)", systemArch, systemRamGB)
-	} else if hasBtrfs {
-		logMsg("Btrfs available, ZFS not available (arch=%s, ram=%dGB)", systemArch, systemRamGB)
+	if hasBtrfs {
+		logMsg("Btrfs available (arch=%s, ram=%dGB)", systemArch, systemRamGB)
 	} else {
-		logMsg("WARNING: No supported storage backend (arch=%s, ram=%dGB) — install zfsutils-linux or btrfs-progs", systemArch, systemRamGB)
+		logMsg("WARNING: No supported storage backend (arch=%s, ram=%dGB) — install btrfs-progs", systemArch, systemRamGB)
 	}
 }
 

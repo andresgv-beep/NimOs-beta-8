@@ -46,7 +46,7 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 			jsonOk(w, map[string]interface{}{"alerts": currentAlerts2})
 		case "/api/storage/capabilities":
 			jsonOk(w, map[string]interface{}{
-				"zfs":   hasZfs,
+				"zfs":   false, // Beta 8: ZFS no longer supported
 				"btrfs": hasBtrfs,
 				"arch":  systemArch,
 				"ramGB": systemRamGB,
@@ -83,12 +83,14 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		switch urlPath {
 		case "/api/storage/pool":
 			poolType := bodyStr(body, "type")
-			if poolType == "zfs" || (hasZfs && poolType == "") {
-				jsonOk(w, createPoolZfs(body))
-			} else if poolType == "btrfs" && hasBtrfs {
-				jsonOk(w, createPoolBtrfs(body))
+			if poolType == "" || poolType == "btrfs" {
+				if !hasBtrfs {
+					jsonError(w, 400, "BTRFS not available on this system")
+				} else {
+					jsonOk(w, createPoolBtrfs(body))
+				}
 			} else {
-				jsonError(w, 400, "No supported filesystem available")
+				jsonError(w, 400, fmt.Sprintf("Unsupported pool type '%s' (Beta 8 is BTRFS-only)", poolType))
 			}
 		case "/api/storage/scan":
 			rescanSCSIBuses()
@@ -116,12 +118,10 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				switch poolType {
-				case "zfs":
-					jsonOk(w, destroyPoolZfs(poolName))
-				case "btrfs":
+				case "btrfs", "":
 					jsonOk(w, destroyPoolBtrfs(poolName))
 				default:
-					jsonError(w, 400, fmt.Sprintf("Unknown pool type '%s'", poolType))
+					jsonError(w, 400, fmt.Sprintf("Unsupported pool type '%s' (Beta 8 is BTRFS-only)", poolType))
 				}
 			}
 		case "/api/storage/pool/export":
@@ -140,12 +140,10 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				switch poolType {
-				case "zfs":
-					jsonOk(w, exportPoolZfs(poolName))
-				case "btrfs":
+				case "btrfs", "":
 					jsonOk(w, exportPoolBtrfs(poolName))
 				default:
-					jsonError(w, 400, fmt.Sprintf("Unknown pool type '%s'", poolType))
+					jsonError(w, 400, fmt.Sprintf("Unsupported pool type '%s' (Beta 8 is BTRFS-only)", poolType))
 				}
 			}
 		case "/api/storage/pool/restore":
@@ -177,11 +175,8 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		case "/api/storage/scrub":
 			jsonOk(w, startScrub(body))
 		case "/api/storage/dataset":
-			if method == "POST" {
-				jsonOk(w, createDataset(body))
-			} else if method == "DELETE" {
-				jsonOk(w, deleteDataset(body))
-			}
+			// Beta 8: datasets ZFS removed. BTRFS subvolume support pending Beta 9.
+			jsonError(w, 410, "Dataset management not supported in Beta 8 (BTRFS subvolume support pending)")
 		default:
 			jsonError(w, 404, "Not found")
 		}

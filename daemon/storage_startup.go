@@ -14,36 +14,7 @@ import (
 
 // ─── Startup functions (called from main.go) ────────────────────────────────
 
-func zfsAutoImportOnStartup() {
-	if !hasZfs {
-		return
-	}
-	// Import all known ZFS pools
-	runSafe("zpool", "import", "-a", "-N")
-
-	conf := getStorageConfigFull()
-	confPools, _ := conf["pools"].([]interface{})
-	for _, poolRaw := range confPools {
-		pm, _ := poolRaw.(map[string]interface{})
-		poolType, _ := pm["type"].(string)
-		if poolType != "zfs" {
-			continue
-		}
-		zpoolName, _ := pm["zpoolName"].(string)
-		mountPoint, _ := pm["mountPoint"].(string)
-		if zpoolName == "" || mountPoint == "" {
-			continue
-		}
-		// Check if pool is imported
-		if _, ok := runSafe("zpool", "list", "-H", "-o", "name", zpoolName); !ok {
-			runSafe("zpool", "import", zpoolName)
-		}
-		// Set mount point and mount
-		runSafe("zfs", "set", "mountpoint="+mountPoint, zpoolName)
-		runSafe("zfs", "mount", "-a")
-	}
-	logMsg("ZFS auto-import completed")
-}
+// Beta 8: zfsAutoImportOnStartup() removed (ZFS no longer supported).
 
 func btrfsAutoMountOnStartup() {
 	if !hasBtrfs {
@@ -102,10 +73,9 @@ func startStorageMonitoring() {
 	}()
 }
 
-func startZfsScheduler() {
-	// TODO: reimplement with new storage_health.go
-	logMsg("ZFS scheduler: stub (pending rewrite)")
-}
+// Beta 8: startZfsScheduler() removed (ZFS no longer supported).
+// Para Beta 9 / BTRFS scrub scheduling: ver startScrubScheduler()
+// en storage_btrfs_features.go
 
 // ─── Detection (called from hardware.go) ─────────────────────────────────────
 
@@ -357,115 +327,17 @@ func rescanSCSIBuses() {
 	runSafe("udevadm", "settle", "--timeout=5")
 }
 
+// scanForRestorablePoolsGo escanea pools "huérfanos" en disco que no están
+// en la config. Originalmente importaba pools ZFS y leía .nimbus-pool.json.
+//
+// Beta 8: ZFS removed. Restore de pools BTRFS huérfanos se implementará
+// en Beta 9 leyendo BTRFS UUID via `btrfs filesystem show` y matching
+// contra identity files en cada FS montable.
+//
+// Por ahora devuelve vacío — el flujo "Restore" en la UI mostrará "no
+// hay pools restaurables" hasta que se reimplemente.
 func scanForRestorablePoolsGo() []map[string]interface{} {
-	var restorable []map[string]interface{}
-
-	// Step 1: Import any ZFS pools not yet imported
-	if hasZfs {
-		runSafe("zpool", "import", "-a", "-N")
-	}
-
-	// Step 2: Get list of imported ZFS pools
-	zpoolList, _ := runSafe("zpool", "list", "-H", "-o", "name,size,health")
-
-	// Step 3: Get pools already in storage.json
-	conf := getStorageConfigFull()
-	confPools, _ := conf["pools"].([]interface{})
-	knownPools := map[string]bool{}
-	for _, raw := range confPools {
-		pm, _ := raw.(map[string]interface{})
-		if zn, _ := pm["zpoolName"].(string); zn != "" {
-			knownPools[zn] = true
-		}
-		if n, _ := pm["name"].(string); n != "" {
-			knownPools["nimos-"+n] = true
-		}
-	}
-
-	// Step 4: For each imported ZFS pool, check if it has .nimbus-pool.json
-	for _, line := range strings.Split(zpoolList, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		zpoolName := fields[0]
-		zpoolSize := fields[1]
-		zpoolHealth := fields[2]
-
-		// Skip if already known
-		if knownPools[zpoolName] {
-			continue
-		}
-
-		// Try to find mount point or use default
-		mountPoint := "/nimbus/pools/" + strings.TrimPrefix(zpoolName, "nimos-")
-
-		// Try to mount temporarily to read identity
-		runSafe("zfs", "set", "mountpoint="+mountPoint, zpoolName)
-		runSafe("zfs", "mount", zpoolName)
-
-		// Read identity file
-		identityPath := filepath.Join(mountPoint, ".nimbus-pool.json")
-		data, err := os.ReadFile(identityPath)
-		if err != nil {
-			// No identity file — not a NimOS pool, unmount
-			runSafe("zfs", "unmount", zpoolName)
-			continue
-		}
-
-		var identity map[string]interface{}
-		if json.Unmarshal(data, &identity) != nil {
-			runSafe("zfs", "unmount", zpoolName)
-			continue
-		}
-
-		// Check if there's a config backup
-		hasBackup := false
-		backupDir := filepath.Join(mountPoint, "system-backup", "config")
-		if _, err := os.Stat(filepath.Join(backupDir, "nimos.db")); err == nil {
-			hasBackup = true
-		}
-
-		// Check what shares exist on this pool
-		sharesDir := filepath.Join(mountPoint, "shares")
-		var shareNames []string
-		if entries, err := os.ReadDir(sharesDir); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-					shareNames = append(shareNames, e.Name())
-				}
-			}
-		}
-
-		// Check if docker data exists
-		hasDocker := false
-		if _, err := os.Stat(filepath.Join(mountPoint, "docker", "data")); err == nil {
-			hasDocker = true
-		}
-
-		poolName, _ := identity["name"].(string)
-		poolType, _ := identity["type"].(string)
-		vdevType, _ := identity["vdevType"].(string)
-
-		restorable = append(restorable, map[string]interface{}{
-			"zpoolName":  zpoolName,
-			"name":       poolName,
-			"type":       poolType,
-			"vdevType":   vdevType,
-			"size":       zpoolSize,
-			"health":     zpoolHealth,
-			"mountPoint": mountPoint,
-			"hasBackup":  hasBackup,
-			"hasDocker":  hasDocker,
-			"shares":     shareNames,
-			"identity":   identity,
-		})
-
-		// Unmount — user decides whether to restore
-		runSafe("zfs", "unmount", zpoolName)
-	}
-
-	return restorable
+	return []map[string]interface{}{}
 }
 
 func backupConfigToPoolGo() {

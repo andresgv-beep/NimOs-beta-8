@@ -714,14 +714,15 @@ func main() {
 		logMsg("Storage scheduler disabled by NIMOS_NO_STORAGE_SCHEDULER=1")
 	}
 
-	// FIRST: Mount all pools before anything else touches storage
-	zfsAutoImportOnStartup()
+	// FIRST: Mount all pools before anything else touches storage.
+	// Beta 8: ZFS no longer supported; only BTRFS auto-mount.
 	btrfsAutoMountOnStartup()
 	startupStorage()
 
 	// THEN: Start monitoring (cleanOrphanMountPoints runs here, AFTER pools are mounted)
 	startStorageMonitoring()
-	startZfsScheduler()
+	// Beta 8: ZFS scheduler removed. BTRFS scrub scheduling is handled by
+	// startScrubScheduler() in storage_btrfs_features.go.
 
 	// Start backup scheduler
 	startBackupScheduler()

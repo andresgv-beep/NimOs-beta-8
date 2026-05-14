@@ -372,18 +372,9 @@ func wipeDiskInternal(diskPath string) map[string]interface{} {
 			return nil
 		}},
 
-		// 2. Clear ZFS labels and BTRFS multi-device locks
+		// 2. Clear BTRFS multi-device locks.
+		// Beta 8: ZFS label clearing removed (ZFS no longer supported).
 		{Name: "clear_fs_labels", Policy: Continue, Do: func() error {
-			if hasZfs {
-				runCmd("zpool", []string{"labelclear", "-f", diskPath}, optsNoFail)
-				partsOut, _ := runCmd("lsblk", []string{"-ln", "-o", "NAME", diskPath}, optsNoFail)
-				for _, line := range strings.Split(partsOut.Stdout, "\n") {
-					p := strings.TrimSpace(line)
-					if p != "" && p != diskBase {
-						runCmd("zpool", []string{"labelclear", "-f", "/dev/" + p}, optsNoFail)
-					}
-				}
-			}
 			// Release BTRFS multi-device lock — without this, mkfs.btrfs
 			// fails with "Device or resource busy" on multi-device pools
 			if hasBtrfs {

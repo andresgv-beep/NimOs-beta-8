@@ -87,47 +87,13 @@ func handleDetachDisk(body map[string]interface{}) map[string]interface{} {
 	}
 
 	switch poolType {
-	case "zfs":
-		return detachDiskZfs(poolConf, diskName)
-	case "btrfs":
+	case "btrfs", "":
 		return detachDiskBtrfs(poolConf, diskName)
 	default:
-		return map[string]interface{}{"error": fmt.Sprintf("Unsupported pool type: %s", poolType)}
+		return map[string]interface{}{"error": fmt.Sprintf("Unsupported pool type: %s (Beta 8 is BTRFS-only)", poolType)}
 	}
 }
 
-// detachDiskZfs runs: zpool detach <pool> <disk>
-func detachDiskZfs(poolConf map[string]interface{}, diskName string) map[string]interface{} {
-	poolName, _ := poolConf["name"].(string)
-	zpoolName, _ := poolConf["zpoolName"].(string)
-	if zpoolName == "" {
-		zpoolName = "nimos-" + poolName
-	}
-
-	diskPart := partitionName("/dev/" + diskName)
-
-	res, err := runCmd("zpool", []string{"detach", zpoolName, diskPart}, CmdOptions{Timeout: 30 * time.Second})
-	if err != nil || !res.OK {
-		errMsg := res.Stderr
-		if errMsg == "" {
-			errMsg = res.Stdout
-		}
-		return map[string]interface{}{"error": fmt.Sprintf("zpool detach failed: %s", errMsg)}
-	}
-
-	// Remove disk from config
-	removeDiskFromPoolConfig(poolName, diskName)
-
-	addNotification("warning", "system",
-		fmt.Sprintf("Disco %s desmontado de %s", diskName, poolName),
-		fmt.Sprintf("El volumen %s funciona en modo degradado. Reemplaza el disco lo antes posible.", poolName))
-
-	logMsg("DISK DETACH: pool %s, removed %s (ZFS)", poolName, diskName)
-
-	return map[string]interface{}{"ok": true, "message": fmt.Sprintf("Disk %s detached. Pool is now degraded.", diskName)}
-}
-
-// detachDiskBtrfs runs: btrfs device delete <disk> <mountpoint>
 func detachDiskBtrfs(poolConf map[string]interface{}, diskName string) map[string]interface{} {
 	poolName, _ := poolConf["name"].(string)
 	mountPoint, _ := poolConf["mountPoint"].(string)
@@ -241,66 +207,13 @@ func handleAttachDisk(body map[string]interface{}) map[string]interface{} {
 	}
 
 	switch poolType {
-	case "zfs":
-		return attachDiskZfs(poolConf, newDisk)
-	case "btrfs":
+	case "btrfs", "":
 		return attachDiskBtrfs(poolConf, newDisk)
 	default:
-		return map[string]interface{}{"error": fmt.Sprintf("Unsupported pool type: %s", poolType)}
+		return map[string]interface{}{"error": fmt.Sprintf("Unsupported pool type: %s (Beta 8 is BTRFS-only)", poolType)}
 	}
 }
 
-// attachDiskZfs runs: zpool attach <pool> <existing-disk> <new-disk>
-func attachDiskZfs(poolConf map[string]interface{}, newDisk string) map[string]interface{} {
-	poolName, _ := poolConf["name"].(string)
-	zpoolName, _ := poolConf["zpoolName"].(string)
-	if zpoolName == "" {
-		zpoolName = "nimos-" + poolName
-	}
-
-	// Get existing disk from pool
-	disks, _ := poolConf["disks"].([]interface{})
-	if len(disks) == 0 {
-		return map[string]interface{}{"error": "Pool has no disks"}
-	}
-	existingDisk := strings.TrimPrefix(disks[0].(string), "/dev/")
-	existingPart := partitionName("/dev/" + existingDisk)
-
-	opts := CmdOptions{Timeout: 60 * time.Second}
-	optsShort := CmdOptions{Timeout: 10 * time.Second}
-
-	// Wipe and partition new disk
-	runCmd("wipefs", []string{"-a", "/dev/" + newDisk}, optsShort)
-	runCmd("sgdisk", []string{"-Z", "/dev/" + newDisk}, optsShort)
-	runCmd("sgdisk", []string{"-n", "1:0:0", "-t", "1:BF01", "/dev/" + newDisk}, opts)
-	runCmd("udevadm", []string{"settle", "--timeout=5"}, optsShort)
-	time.Sleep(time.Second)
-
-	newPart := partitionName("/dev/" + newDisk)
-	waitForDevice(newPart, 10*time.Second)
-
-	// zpool attach — adds the new disk as mirror of existing
-	res, err := runCmd("zpool", []string{"attach", "-f", zpoolName, existingPart, newPart}, CmdOptions{Timeout: 30 * time.Second})
-	if err != nil || !res.OK {
-		errMsg := res.Stderr
-		if errMsg == "" {
-			errMsg = res.Stdout
-		}
-		return map[string]interface{}{"error": fmt.Sprintf("zpool attach failed: %s", errMsg)}
-	}
-
-	addDiskToPoolConfig(poolName, newDisk)
-
-	addNotification("success", "system",
-		fmt.Sprintf("Disco añadido a %s", poolName),
-		fmt.Sprintf("Se ha añadido %s al espejo. El resilver reconstruirá la redundancia.", newDisk))
-
-	logMsg("DISK ATTACH: pool %s, added %s (ZFS resilver started)", poolName, newDisk)
-
-	return map[string]interface{}{"ok": true, "message": "Disk attached, resilver started"}
-}
-
-// attachDiskBtrfs runs: btrfs device add <new-disk> <mountpoint>
 func attachDiskBtrfs(poolConf map[string]interface{}, newDisk string) map[string]interface{} {
 	poolName, _ := poolConf["name"].(string)
 	mountPoint, _ := poolConf["mountPoint"].(string)
@@ -409,62 +322,13 @@ func handleReplaceDisk(body map[string]interface{}) map[string]interface{} {
 	}
 
 	switch poolType {
-	case "zfs":
-		return replaceDiskZfs(poolConf, oldDisk, newDisk)
-	case "btrfs":
+	case "btrfs", "":
 		return replaceDiskBtrfs(poolConf, oldDisk, newDisk)
 	default:
-		return map[string]interface{}{"error": fmt.Sprintf("Unsupported pool type: %s", poolType)}
+		return map[string]interface{}{"error": fmt.Sprintf("Unsupported pool type: %s (Beta 8 is BTRFS-only)", poolType)}
 	}
 }
 
-// replaceDiskZfs runs: zpool replace <pool> <old> <new>
-func replaceDiskZfs(poolConf map[string]interface{}, oldDisk, newDisk string) map[string]interface{} {
-	poolName, _ := poolConf["name"].(string)
-	zpoolName, _ := poolConf["zpoolName"].(string)
-	if zpoolName == "" {
-		zpoolName = "nimos-" + poolName
-	}
-
-	newDiskPath := "/dev/" + newDisk
-	newPart := partitionName(newDiskPath)
-	opts := CmdOptions{Timeout: 60 * time.Second}
-	optsShort := CmdOptions{Timeout: 15 * time.Second}
-
-	// Wipe and partition new disk
-	runCmd("wipefs", []string{"-a", newDiskPath}, opts)
-	runCmd("sgdisk", []string{"-Z", newDiskPath}, optsShort)
-	runCmd("sgdisk", []string{"-n", "1:0:0", "-t", "1:BF01", newDiskPath}, opts)
-	runCmd("udevadm", []string{"settle", "--timeout=5"}, optsShort)
-	time.Sleep(time.Second)
-	waitForDevice(newPart, 10*time.Second)
-
-	// Find the old partition in the pool
-	oldPart := partitionName("/dev/" + oldDisk)
-
-	// zpool replace — this starts resilver automatically
-	res, err := runCmd("zpool", []string{"replace", "-f", zpoolName, oldPart, newPart}, CmdOptions{Timeout: 30 * time.Second})
-	if err != nil || !res.OK {
-		errMsg := res.Stderr
-		if errMsg == "" {
-			errMsg = res.Stdout
-		}
-		return map[string]interface{}{"error": fmt.Sprintf("zpool replace failed: %s", errMsg)}
-	}
-
-	// Update config: replace old disk with new
-	updatePoolConfigDisk(poolName, oldDisk, newDisk)
-
-	addNotification("info", "system",
-		fmt.Sprintf("Reemplazo de disco iniciado en %s", poolName),
-		fmt.Sprintf("Reemplazando %s por %s. El resilver puede tardar horas según el tamaño.", oldDisk, newDisk))
-
-	logMsg("DISK REPLACE: pool %s, %s -> %s (ZFS resilver started)", poolName, oldDisk, newDisk)
-
-	return map[string]interface{}{"ok": true, "message": "Resilver started"}
-}
-
-// replaceDiskBtrfs runs: btrfs device add + btrfs device delete
 func replaceDiskBtrfs(poolConf map[string]interface{}, oldDisk, newDisk string) map[string]interface{} {
 	poolName, _ := poolConf["name"].(string)
 	mountPoint, _ := poolConf["mountPoint"].(string)
