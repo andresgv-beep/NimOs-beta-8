@@ -23,6 +23,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -154,18 +155,26 @@ func (h *StorageHTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/storage/v2/devices", h.handleDevices)
 	mux.HandleFunc("/api/storage/v2/operations", h.handleOperations)
 	mux.HandleFunc("/api/storage/v2/generation", h.handleGeneration)
+	mux.HandleFunc("/api/storage/v2/scan", h.handleScan)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/storage/v2/pools — lista todos los pools hidratados
+// /api/storage/v2/pools — GET (list) | POST (create)
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (h *StorageHTTPHandler) handlePools(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, "GET")
-		return
+	switch r.Method {
+	case http.MethodGet:
+		h.listPools(w, r)
+	case http.MethodPost:
+		h.createPool(w, r)
+	default:
+		methodNotAllowed(w, "GET", "POST")
 	}
+}
 
+// listPools — GET /api/storage/v2/pools
+func (h *StorageHTTPHandler) listPools(w http.ResponseWriter, r *http.Request) {
 	pools, err := h.service.ListPools(r.Context())
 	if err != nil {
 		writeServiceError(w, err)
@@ -174,8 +183,41 @@ func (h *StorageHTTPHandler) handlePools(w http.ResponseWriter, r *http.Request)
 	writeData(w, http.StatusOK, pools)
 }
 
+// createPool — POST /api/storage/v2/pools
+//
+// Body:
+//   {"name": "data", "profile": "raid1",
+//    "device_ids": ["d1", "d2"],
+//    "compression": "zstd", "wipe_first": false}
+func (h *StorageHTTPHandler) createPool(w http.ResponseWriter, r *http.Request) {
+	var req CreatePoolRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, ErrCodeBadRequest, err.Error())
+		return
+	}
+
+	op, err := h.service.CreatePool(r.Context(), req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	// 200 OK + Operation. El frontend mira op.Status y op.PoolID
+	// para decidir cómo seguir.
+	writeData(w, http.StatusOK, op)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/storage/v2/pools/{id} — detalle de un pool
+// /api/storage/v2/pools/{id}[/subresource...]
+//
+// Multiplexa según path y método:
+//   GET    /pools/{id}                            → detalle
+//   DELETE /pools/{id}                            → destroy
+//   POST   /pools/{id}/rename                     → rename
+//   POST   /pools/{id}/set-compression            → set compression
+//   POST   /pools/{id}/convert-profile            → convert profile
+//   POST   /pools/{id}/devices                    → add device
+//   DELETE /pools/{id}/devices/{deviceID}         → remove device
+//   POST   /pools/{id}/devices/{deviceID}/replace → replace device
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (h *StorageHTTPHandler) handlePoolByID(w http.ResponseWriter, r *http.Request) {
@@ -184,23 +226,257 @@ func (h *StorageHTTPHandler) handlePoolByID(w http.ResponseWriter, r *http.Reque
 		writeError(w, ErrCodeBadRequest, "missing pool id in path")
 		return
 	}
-	if rest != "" {
-		// Subrecursos (devices, rename, etc.) — gestionados en Bloque 4.
-		writeError(w, ErrCodeBadRequest, "subresource not yet supported")
+
+	// Caso 1: /pools/{id}     (sin subrecurso)
+	if rest == "" {
+		switch r.Method {
+		case http.MethodGet:
+			h.getPool(w, r, id)
+		case http.MethodDelete:
+			h.destroyPool(w, r, id)
+		default:
+			methodNotAllowed(w, "GET", "DELETE")
+		}
 		return
 	}
 
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, "GET")
-		return
-	}
+	// Caso 2: /pools/{id}/{subresource...}
+	switch {
+	case rest == "rename":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return
+		}
+		h.renamePool(w, r, id)
 
+	case rest == "set-compression":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return
+		}
+		h.setCompression(w, r, id)
+
+	case rest == "convert-profile":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return
+		}
+		h.convertProfile(w, r, id)
+
+	case rest == "devices":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return
+		}
+		h.addDevice(w, r, id)
+
+	case strings.HasPrefix(rest, "devices/"):
+		// /pools/{id}/devices/{deviceID}[/replace]
+		deviceTail := rest[len("devices/"):]
+		deviceID, deviceRest := splitFirstSegment(deviceTail)
+		if deviceID == "" {
+			writeError(w, ErrCodeBadRequest, "missing device id in path")
+			return
+		}
+		switch {
+		case deviceRest == "":
+			if r.Method != http.MethodDelete {
+				methodNotAllowed(w, "DELETE")
+				return
+			}
+			h.removeDevice(w, r, id, deviceID)
+		case deviceRest == "replace":
+			if r.Method != http.MethodPost {
+				methodNotAllowed(w, "POST")
+				return
+			}
+			h.replaceDevice(w, r, id, deviceID)
+		default:
+			writeError(w, ErrCodeBadRequest, "unknown device subresource")
+		}
+
+	default:
+		writeError(w, ErrCodeBadRequest, "unknown pool subresource")
+	}
+}
+
+// ─── /pools/{id} handlers ─────────────────────────────────────────────────────
+
+func (h *StorageHTTPHandler) getPool(w http.ResponseWriter, r *http.Request, id string) {
 	pool, err := h.service.GetPool(r.Context(), id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	writeData(w, http.StatusOK, pool)
+}
+
+func (h *StorageHTTPHandler) destroyPool(w http.ResponseWriter, r *http.Request, id string) {
+	op, err := h.service.DestroyPool(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─── /pools/{id}/rename ───────────────────────────────────────────────────────
+
+type renamePoolRequest struct {
+	Name string `json:"name"`
+}
+
+func (h *StorageHTTPHandler) renamePool(w http.ResponseWriter, r *http.Request, id string) {
+	var req renamePoolRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, ErrCodeBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeError(w, ErrCodeBadRequest, "name is required")
+		return
+	}
+	op, err := h.service.RenamePool(r.Context(), id, req.Name)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─── /pools/{id}/set-compression ──────────────────────────────────────────────
+
+type setCompressionRequest struct {
+	Algorithm string `json:"algorithm"`
+}
+
+func (h *StorageHTTPHandler) setCompression(w http.ResponseWriter, r *http.Request, id string) {
+	var req setCompressionRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, ErrCodeBadRequest, err.Error())
+		return
+	}
+	if req.Algorithm == "" {
+		writeError(w, ErrCodeBadRequest, "algorithm is required")
+		return
+	}
+	op, err := h.service.SetPoolCompression(r.Context(), id, req.Algorithm)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─── /pools/{id}/convert-profile ──────────────────────────────────────────────
+
+type convertProfileBody struct {
+	NewProfile Profile `json:"new_profile"`
+}
+
+func (h *StorageHTTPHandler) convertProfile(w http.ResponseWriter, r *http.Request, id string) {
+	var body convertProfileBody
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeError(w, ErrCodeBadRequest, err.Error())
+		return
+	}
+	op, err := h.service.ConvertProfile(r.Context(), ConvertProfileRequest{
+		PoolID:     id,
+		NewProfile: body.NewProfile,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─── /pools/{id}/devices ──────────────────────────────────────────────────────
+
+type addDeviceBody struct {
+	DeviceID  string `json:"device_id"`
+	WipeFirst bool   `json:"wipe_first,omitempty"`
+}
+
+func (h *StorageHTTPHandler) addDevice(w http.ResponseWriter, r *http.Request, poolID string) {
+	var body addDeviceBody
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeError(w, ErrCodeBadRequest, err.Error())
+		return
+	}
+	if body.DeviceID == "" {
+		writeError(w, ErrCodeBadRequest, "device_id is required")
+		return
+	}
+	op, err := h.service.AddDevice(r.Context(), AddDeviceRequest{
+		PoolID:    poolID,
+		DeviceID:  body.DeviceID,
+		WipeFirst: body.WipeFirst,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─── /pools/{id}/devices/{deviceID} ───────────────────────────────────────────
+
+func (h *StorageHTTPHandler) removeDevice(w http.ResponseWriter, r *http.Request, poolID, deviceID string) {
+	op, err := h.service.RemoveDevice(r.Context(), RemoveDeviceRequest{
+		PoolID:   poolID,
+		DeviceID: deviceID,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─── /pools/{id}/devices/{deviceID}/replace ───────────────────────────────────
+
+type replaceDeviceBody struct {
+	NewDeviceID string `json:"new_device_id"`
+}
+
+func (h *StorageHTTPHandler) replaceDevice(w http.ResponseWriter, r *http.Request, poolID, oldDeviceID string) {
+	var body replaceDeviceBody
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeError(w, ErrCodeBadRequest, err.Error())
+		return
+	}
+	if body.NewDeviceID == "" {
+		writeError(w, ErrCodeBadRequest, "new_device_id is required")
+		return
+	}
+	op, err := h.service.ReplaceDevice(r.Context(), ReplaceDeviceRequest{
+		PoolID:      poolID,
+		OldDeviceID: oldDeviceID,
+		NewDeviceID: body.NewDeviceID,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, op)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /api/storage/v2/scan — POST → ScanDevices
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (h *StorageHTTPHandler) handleScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	result, err := h.service.ScanDevices(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, result)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,10 +581,36 @@ func splitPoolIDPath(urlPath string) (id, rest string) {
 	if after == "" {
 		return "", ""
 	}
-	for i := 0; i < len(after); i++ {
-		if after[i] == '/' {
-			return after[:i], after[i+1:]
+	return splitFirstSegment(after)
+}
+
+// splitFirstSegment toma una cadena tipo "abc/def/ghi" y la divide en
+// el primer segmento y el resto: ("abc", "def/ghi"). Si no hay "/",
+// devuelve (cadena, "").
+func splitFirstSegment(s string) (first, rest string) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			return s[:i], s[i+1:]
 		}
 	}
-	return after, ""
+	return s, ""
+}
+
+// decodeJSONBody decodifica el body de la petición en dest. Limita
+// el tamaño del body a 64 KB para evitar abuso. Rechaza JSON malformado.
+//
+// El caller debe validar los CAMPOS de dest (longitudes, no-vacíos, etc.).
+// Esta función solo valida que el JSON parsea.
+func decodeJSONBody(r *http.Request, dest interface{}) error {
+	if r.Body == nil {
+		return fmt.Errorf("empty request body")
+	}
+	// 64 KB es de sobra para nuestros payloads (pool name + 4 device IDs)
+	r.Body = http.MaxBytesReader(nil, r.Body, 64*1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields() // rechaza campos extra → ayuda a detectar typos del cliente
+	if err := dec.Decode(dest); err != nil {
+		return fmt.Errorf("invalid JSON body: %v", err)
+	}
+	return nil
 }
