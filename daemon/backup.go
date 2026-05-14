@@ -835,25 +835,6 @@ func executeBackupJob(job map[string]interface{}) map[string]interface{} {
 	sshOpts := sshOptsForDevice(deviceID)
 
 	switch fsType {
-	case "zfs":
-		snapName = fmt.Sprintf("nimbackup-%s", timestamp)
-		fullSnap := fmt.Sprintf("%s@%s", source, snapName)
-
-		// 1. Create local snapshot
-		if errMsg, err := zfsSnapshotCreate(fullSnap); err != nil {
-			recordBackupFailure(jobID, jobName, deviceID, dest, "snapshot failed: "+errMsg)
-			return map[string]interface{}{"error": "Failed to create snapshot: " + errMsg}
-		}
-
-		// 2. Send (incremental if previous snapshot exists)
-		if lastSnap != "" {
-			cmdStr = fmt.Sprintf("zfs send -i %s@%s %s | ssh %s root@%s 'zfs receive -F %s'",
-				source, lastSnap, fullSnap, sshOpts, remoteAddr, dest)
-		} else {
-			cmdStr = fmt.Sprintf("zfs send %s | ssh %s root@%s 'zfs receive -F %s'",
-				fullSnap, sshOpts, remoteAddr, dest)
-		}
-
 	case "btrfs":
 		snapName = fmt.Sprintf("nimbackup-%s", timestamp)
 		snapPath := fmt.Sprintf("%s/.snapshots/%s", source, snapName)
@@ -893,27 +874,20 @@ func executeBackupJob(job map[string]interface{}) map[string]interface{} {
 		return map[string]interface{}{"error": "Backup failed: " + out}
 	}
 
-	// Estimate bytes transferred (from zfs/btrfs send output or fallback)
+	// Estimate bytes transferred from BTRFS snapshot exclusive size.
 	var transferredBytes int64
-	if fsType == "zfs" {
-		// Try to get size from the snapshot
-		if sizeOut, ok := runSafe("zfs", "get", "-Hp", "-o", "value", "used", source+"@"+snapName); ok {
-			transferredBytes = parseByteSize(sizeOut)
-		}
-	} else {
-		// Btrfs: estimate from snapshot exclusive size
-		snapPath := fmt.Sprintf("%s/.snapshots/%s", source, snapName)
-		if sizeOut, ok := runSafe("btrfs", "subvolume", "show", snapPath); ok {
-			for _, line := range strings.Split(sizeOut, "\n") {
-				if strings.Contains(line, "Exclusive") {
-					fields := strings.Fields(line)
-					if len(fields) > 0 {
-						transferredBytes = parseByteSize(fields[len(fields)-1])
-					}
+	snapPath := fmt.Sprintf("%s/.snapshots/%s", source, snapName)
+	if sizeOut, ok := runSafe("btrfs", "subvolume", "show", snapPath); ok {
+		for _, line := range strings.Split(sizeOut, "\n") {
+			if strings.Contains(line, "Exclusive") {
+				fields := strings.Fields(line)
+				if len(fields) > 0 {
+					transferredBytes = parseByteSize(fields[len(fields)-1])
 				}
 			}
 		}
 	}
+	_ = fsType // backward-compat: still on the signature, BTRFS-only now
 
 	// Record success
 	schedule, _ := job["schedule"].(string)
@@ -1002,52 +976,8 @@ func applyRetention(job map[string]interface{}) {
 	maxAge, maxCount := parseRetention(retention)
 
 	switch fsType {
-	case "zfs":
-		applyRetentionZFS(source, maxAge, maxCount)
 	case "btrfs":
 		applyRetentionBtrfs(source, maxAge, maxCount)
-	}
-}
-
-func applyRetentionZFS(dataset string, maxAge time.Duration, maxCount int) {
-	// List nimbackup snapshots for this dataset, sorted oldest first
-	out, ok := runSafe("zfs", "list", "-t", "snapshot", "-H", "-o", "name,creation", "-s", "creation", dataset)
-	if !ok || out == "" {
-		return
-	}
-
-	lines := strings.Split(out, "\n")
-	var nimSnapshots []string
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) >= 1 && strings.Contains(fields[0], "nimbackup") {
-			nimSnapshots = append(nimSnapshots, fields[0])
-		}
-	}
-
-	if len(nimSnapshots) <= 1 {
-		return // Always keep at least one
-	}
-
-	toDelete := []string{}
-
-	if maxAge > 0 {
-		cutoff := time.Now().UTC().Add(-maxAge)
-		for _, snap := range nimSnapshots[:len(nimSnapshots)-1] {
-			ts := extractTimestamp(snap)
-			if !ts.IsZero() && ts.Before(cutoff) {
-				toDelete = append(toDelete, snap)
-			}
-		}
-	} else if maxCount > 0 {
-		if len(nimSnapshots) > maxCount {
-			toDelete = nimSnapshots[:len(nimSnapshots)-maxCount]
-		}
-	}
-
-	for _, snap := range toDelete {
-		logMsg("backup: retention cleanup — destroying %s", snap)
-		zfsSnapshotDestroy(snap)
 	}
 }
 
@@ -2360,13 +2290,6 @@ func createBackupSnapshot(source, fsType string) map[string]interface{} {
 	snapName := fmt.Sprintf("nimbackup-%s", timestamp)
 
 	switch fsType {
-	case "zfs":
-		fullSnap := fmt.Sprintf("%s@%s", source, snapName)
-		if errMsg, err := zfsSnapshotCreate(fullSnap); err != nil {
-			return map[string]interface{}{"error": "Failed: " + errMsg}
-		}
-		return map[string]interface{}{"ok": true, "name": fullSnap, "type": "zfs"}
-
 	case "btrfs":
 		snapPath := fmt.Sprintf("%s/.snapshots/%s", source, snapName)
 		os.MkdirAll(source+"/.snapshots", 0755)
@@ -2381,15 +2304,6 @@ func createBackupSnapshot(source, fsType string) map[string]interface{} {
 
 func deleteBackupSnapshot(name, fsType, source string) map[string]interface{} {
 	switch fsType {
-	case "zfs":
-		if !strings.Contains(name, "@") {
-			return map[string]interface{}{"error": "Invalid ZFS snapshot name"}
-		}
-		if errMsg, err := zfsSnapshotDestroy(name); err != nil {
-			return map[string]interface{}{"error": "Failed: " + errMsg}
-		}
-		return map[string]interface{}{"ok": true}
-
 	case "btrfs":
 		snapPath := fmt.Sprintf("%s/.snapshots/%s", source, name)
 		if errMsg, err := btrfsSnapshotDestroy(snapPath); err != nil {
