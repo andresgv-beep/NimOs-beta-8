@@ -37,6 +37,7 @@ type StorageService struct {
 	policy  *PolicyChecker
 	btrfs   BtrfsExecutor
 	scanner DeviceScanner
+	clock   Clock
 	db      *sql.DB // necesario para iniciar transacciones
 }
 
@@ -48,8 +49,15 @@ func NewStorageService(db *sql.DB, repo *StorageRepo, policy *PolicyChecker,
 		policy:  policy,
 		btrfs:   btrfs,
 		scanner: scanner,
+		clock:   NewRealClock(),
 		db:      db,
 	}
+}
+
+// SetClock inyecta un Clock personalizado. Solo para tests (FakeClock).
+// En producción, se usa el RealClock por defecto.
+func (s *StorageService) SetClock(c Clock) {
+	s.clock = c
 }
 
 // Instancia global, conveniente para código que aún no usa inyección.
@@ -617,6 +625,7 @@ func (s *StorageService) ScanDevices(ctx context.Context) (*ScanResult, error) {
 				WWN:         sd.WWN,
 				Model:       sd.Model,
 				SizeBytes:   sd.SizeBytes,
+				LastSeenAt:  s.clock.Now().UTC(),
 			}
 
 			// UpsertDevice devuelve true si fue insert (nuevo), false si update.
