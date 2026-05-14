@@ -42,6 +42,10 @@ func initStorageModule() error {
 	initStoragePolicy()
 	initStorageService()
 
+	// Handler HTTP del nuevo stack — se registra en http.go al arrancar
+	// el servidor (debe estar listo antes de startHTTPServer).
+	storageHTTPHandler = NewStorageHTTPHandler(storageService)
+
 	// Verificación defensiva: leer global_generation. Si esto falla,
 	// algo está mal con la conexión o con el schema.
 	gen, err := storageRepo.GetGlobalGeneration(context.Background())
@@ -51,4 +55,36 @@ func initStorageModule() error {
 
 	logMsg("Storage module ready (global_generation=%d)", gen)
 	return nil
+}
+
+// runStorageStartupTasks ejecuta las tareas de arranque del módulo storage
+// que requieren al servicio ya inicializado:
+//
+//   1. RecoverPendingOperations — resuelve operations huérfanas tras crash
+//   2. ReconcileDevicesAtBoot   — scan inicial, actualiza last_seen_at
+//
+// Llamar DESPUÉS de initStorageModule() y ANTES de servir tráfico HTTP.
+//
+// Ningún fallo aquí debe abortar el daemon — son tareas best-effort. Si
+// algo falla, loggeamos y seguimos; el frontend o el reconciler en
+// background recogerán el guante.
+func runStorageStartupTasks(ctx context.Context) {
+	if storageService == nil {
+		logMsg("runStorageStartupTasks: service not initialized, skipping")
+		return
+	}
+
+	// 1. Recovery de operations huérfanas
+	rec, err := storageService.RecoverPendingOperations(ctx)
+	if err != nil {
+		logMsg("Storage recovery: ERROR (continuing anyway): %v", err)
+	} else if rec.Inspected > 0 {
+		logMsg("Storage recovery: %d operations inspected (%d completed, %d rolled_back, %d inconclusive)",
+			rec.Inspected, rec.Completed, rec.RolledBack, rec.Inconclusive)
+	}
+
+	// 2. Boot reconciliation
+	if err := storageService.ReconcileDevicesAtBoot(ctx); err != nil {
+		logMsg("Storage boot reconciliation: ERROR (continuing anyway): %v", err)
+	}
 }

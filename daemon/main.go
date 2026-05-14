@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -694,10 +695,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Beta 8 storage startup tasks: recovery de operations huérfanas
+	// y boot reconciliation de devices. Best-effort; los fallos se
+	// loggean pero no abortan el daemon.
+	runStorageStartupTasks(context.Background())
+
 	// Start HTTP API server
 	detectHardwareTools()
 	startHTTPServer()
 	startRateLimitCleanup()
+
+	// Beta 8: arrancar el reconciler en background.
+	// Desactivable con NIMOS_NO_STORAGE_SCHEDULER=1 para debugging
+	// o despliegues controlados.
+	if os.Getenv("NIMOS_NO_STORAGE_SCHEDULER") != "1" {
+		StartStorageScheduler(context.Background())
+	} else {
+		logMsg("Storage scheduler disabled by NIMOS_NO_STORAGE_SCHEDULER=1")
+	}
 
 	// FIRST: Mount all pools before anything else touches storage
 	zfsAutoImportOnStartup()

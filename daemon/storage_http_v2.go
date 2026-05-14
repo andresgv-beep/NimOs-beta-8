@@ -142,6 +142,10 @@ type StorageHTTPHandler struct {
 	service *StorageService
 }
 
+// storageHTTPHandler es la instancia global. Inicializada por initStorageModule()
+// y consumida por startHTTPServer() para registrar las rutas v2.
+var storageHTTPHandler *StorageHTTPHandler
+
 // NewStorageHTTPHandler crea el handler con el service inyectado.
 func NewStorageHTTPHandler(service *StorageService) *StorageHTTPHandler {
 	return &StorageHTTPHandler{service: service}
@@ -149,13 +153,28 @@ func NewStorageHTTPHandler(service *StorageService) *StorageHTTPHandler {
 
 // Register registra todas las rutas en el mux dado.
 // El path base es /api/storage/v2.
+//
+// Todas las rutas pasan por requireAdmin (mismo patrón que Beta 7):
+// si la sesión no es admin → 401 Unauthorized sin tocar el service.
 func (h *StorageHTTPHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/api/storage/v2/pools", h.handlePools)
-	mux.HandleFunc("/api/storage/v2/pools/", h.handlePoolByID)
-	mux.HandleFunc("/api/storage/v2/devices", h.handleDevices)
-	mux.HandleFunc("/api/storage/v2/operations", h.handleOperations)
-	mux.HandleFunc("/api/storage/v2/generation", h.handleGeneration)
-	mux.HandleFunc("/api/storage/v2/scan", h.handleScan)
+	mux.HandleFunc("/api/storage/v2/pools", h.requireAdmin(h.handlePools))
+	mux.HandleFunc("/api/storage/v2/pools/", h.requireAdmin(h.handlePoolByID))
+	mux.HandleFunc("/api/storage/v2/devices", h.requireAdmin(h.handleDevices))
+	mux.HandleFunc("/api/storage/v2/operations", h.requireAdmin(h.handleOperations))
+	mux.HandleFunc("/api/storage/v2/generation", h.requireAdmin(h.handleGeneration))
+	mux.HandleFunc("/api/storage/v2/scan", h.requireAdmin(h.handleScan))
+}
+
+// requireAdmin envuelve un handler con verificación de sesión admin.
+// Si requireAdmin (definida en sessions.go) devuelve nil, ya ha escrito
+// el 401 en w, así que solo retornamos.
+func (h *StorageHTTPHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if requireAdmin(w, r) == nil {
+			return
+		}
+		next(w, r)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

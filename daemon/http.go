@@ -374,6 +374,13 @@ func startHTTPServer() {
 	mux.HandleFunc("/api/storage", handleStorageRoutes)
 	mux.HandleFunc("/api/storage/", handleStorageRoutes)
 
+	// ── Storage v2 routes (Beta 8 stack) ──
+	// Las registramos DESPUÉS de las legacy. ServeMux usa "longest match
+	// wins", así que rutas v2 específicas ganan sobre /api/storage/.
+	if storageHTTPHandler != nil {
+		storageHTTPHandler.Register(mux)
+	}
+
 	// ── Docker routes ──
 	mux.HandleFunc("/api/docker/", handleDockerRoutes)
 	mux.HandleFunc("/api/docker", handleDockerRoutes)
